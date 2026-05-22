@@ -1,16 +1,26 @@
 /**
- * Roger Sheet Queue Processing System
- * BullMQ-inspired queue using Google Sheets + Apps Script
+ * Roger Sheet - Automated Job Queue
+ * Pipelines → Queue (jobs reference Actions) → Trigger → History
+ *
+ * Sheets:
+ *   Guide      - README, visible first
+ *   Pipelines  - Named pipelines with pause control      (was: Queues)
+ *   Actions    - Reusable handler definitions             (was: Processors)
+ *   Queue      - Live work: waiting / active / delayed   (was: Jobs)
+ *   Schedules  - Recurring job templates                 (was: Repeatable)
+ *   History    - Completed / failed job archive          (was: JobsGraveyard)
  */
 
-const QUEUE_SHEET_NAME = 'Queue';
-const CRON_SHEET_NAME = 'CronJobs';
-const LOCK_TIMEOUT_MS = 300000; // 5 minutes
+const PIPELINES_SHEET = 'Pipelines';
+const QUEUE_SHEET     = 'Queue';
+const ACTIONS_SHEET   = 'Actions';
+const HISTORY_SHEET   = 'History';
+const SCHEDULES_SHEET = 'Schedules';
+const LOCK_TIMEOUT_MS = 300000;
 const MAX_JOBS_PER_RUN = 50;
-const REQUEST_TIMEOUT_SECONDS = 30;
 
 // ============================================================================
-// WEB APP API ENDPOINTS
+// WEB APP API
 // ============================================================================
 
 function doPost(e) {
@@ -20,24 +30,44 @@ function doPost(e) {
     const data = body.data || {};
 
     const handlers = {
-      createJob: handleCreateJob,
+      // Queue operations
+      createQueue: handleCreateQueue,
+      getQueues: handleGetQueues,
+      pauseQueue: handlePauseQueue,
+      resumeQueue: handleResumeQueue,
+      
+      // Processor operations
+      createProcessor: handleCreateProcessor,
+      getProcessors: handleGetProcessors,
+      getProcessor: handleGetProcessor,
+      updateProcessor: handleUpdateProcessor,
+      deleteProcessor: handleDeleteProcessor,
+      
+      // Job operations
+      addJob: handleAddJob,
       getJobs: handleGetJobs,
       getJob: handleGetJob,
       retryJob: handleRetryJob,
-      cancelJob: handleCancelJob,
-      deleteJob: handleDeleteJob,
-      retryFailedJobs: handleRetryFailedJobs,
-      clearCompletedJobs: handleClearCompletedJobs,
-      getQueues: handleGetQueues,
+      removeJob: handleRemoveJob,
+      cleanJobs: handleCleanJobs,
+      
+      // Graveyard operations
+      getGraveyardJobs: handleGetGraveyardJobs,
+      cleanGraveyard: handleCleanGraveyard,
+      
+      // Repeatable operations
+      addRepeatableJob: handleAddRepeatableJob,
+      getRepeatableJobs: handleGetRepeatableJobs,
+      removeRepeatableJob: handleRemoveRepeatableJob,
+      toggleRepeatableJob: handleToggleRepeatableJob,
+      
+      // Stats
       getQueueStats: handleGetQueueStats,
-      pauseQueue: handlePauseQueue,
-      resumeQueue: handleResumeQueue,
       getWorkerStats: handleGetWorkerStats,
-      getCronJobs: handleGetCronJobs,
-      createCronJob: handleCreateCronJob,
-      deleteCronJob: handleDeleteCronJob,
-      toggleCronJob: handleToggleCronJob,
-      testJob: handleTestJob,
+      
+      // Test
+      testProcessor: handleTestProcessor,
+      testProcessorDraft: handleTestProcessorDraft,
     };
 
     if (handlers[action]) {
@@ -61,306 +91,547 @@ function doGet(e) {
   return ContentService.createTextOutput(
     JSON.stringify({
       success: true,
-      message: 'Roger Sheet Queue System API',
-      version: '1.0.0',
+      message: 'Roger Sheet — Automated Job Queue',
+      version: '4.0.0',
+      sheets: ['Guide', 'Pipelines', 'Actions', 'Queue', 'Schedules', 'History'],
     })
   ).setMimeType(ContentService.MimeType.JSON);
 }
 
 function createJsonResponse(data) {
-  return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(
-    ContentService.MimeType.JSON
-  );
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // ============================================================================
-// API HANDLERS
+// PROCESSOR HANDLERS
 // ============================================================================
 
-function handleCreateJob(data) {
-  Logger.log('=== handleCreateJob ===');
-  Logger.log('Received data: ' + JSON.stringify(data));
+function handleCreateProcessor(data) {
+  const sheet = getOrCreateSheet(ACTIONS_SHEET);
+  ensureProcessorHeaders(sheet);
   
-  const sheet = getOrCreateSheet(QUEUE_SHEET_NAME);
-  ensureHeaders(sheet);
-
-  const payloadObj = {
-    url: data.url,
-    method: data.method || 'POST',
-    headers: data.headers || {},
-    body: data.body || null,
-  };
+  const existing = findProcessorByName(sheet, data.name);
+  if (existing) {
+    return { success: false, error: 'Processor already exists' };
+  }
   
-  Logger.log('Payload object: ' + JSON.stringify(payloadObj));
-  
-  const payloadString = JSON.stringify(payloadObj);
-  Logger.log('Payload string: ' + payloadString);
-  Logger.log('Payload string type: ' + typeof payloadString);
-
-  const job = {
-    id: generateUUID(),
-    queue: data.queue || 'default',
-    type: data.type || 'immediate',
-    payload: payloadString,
-    status: 'pending',
-    priority: data.priority || 5,
-    retryCount: 0,
-    maxRetries: data.maxRetries || 3,
-    runAt: data.runAt || new Date().toISOString(),
-    lockedBy: null,
-    lockedAt: null,
+  const processor = {
+    name: data.name,
+    type: data.type,
+    config: JSON.stringify(data.config),
+    description: data.description || '',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastError: null,
-    completedAt: null,
   };
   
-  Logger.log('Job payload before append: ' + job.payload);
-
-  appendJob(sheet, job);
+  appendProcessor(sheet, processor);
   
-  Logger.log('Job appended to sheet');
-
-  const responseJob = {
-    ...job,
-    payload: payloadObj
-  };
-
   return {
     success: true,
-    data: responseJob,
-    message: 'Job created successfully',
+    data: { ...processor, config: data.config },
+    message: 'Processor created successfully',
+  };
+}
+
+function handleGetProcessors(data) {
+  const sheet = getSheet(ACTIONS_SHEET);
+  if (!sheet) {
+    return { success: true, data: [] };
+  }
+  
+  const processors = getAllProcessors(sheet);
+  return { success: true, data: processors };
+}
+
+function handleGetProcessor(data) {
+  const sheet = getSheet(ACTIONS_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Actions sheet not found' };
+  }
+  
+  const processor = findProcessorByName(sheet, data.name);
+  if (!processor) {
+    return { success: false, error: 'Processor not found' };
+  }
+  
+  return { success: true, data: processor };
+}
+
+function handleUpdateProcessor(data) {
+  const sheet = getSheet(ACTIONS_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Actions sheet not found' };
+  }
+  
+  updateProcessor(sheet, data.name, {
+    config: JSON.stringify(data.config),
+    description: data.description,
+  });
+  
+  const processor = findProcessorByName(sheet, data.name);
+  return { success: true, data: processor };
+}
+
+function handleDeleteProcessor(data) {
+  const sheet = getSheet(ACTIONS_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Actions sheet not found' };
+  }
+  
+  deleteProcessorByName(sheet, data.name);
+  return { success: true, message: 'Processor deleted' };
+}
+
+function handleTestProcessor(data) {
+  const sheet = getSheet(ACTIONS_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Actions sheet not found' };
+  }
+  
+  const processor = findProcessorByName(sheet, data.name);
+  if (!processor) {
+    return { success: false, error: 'Processor not found' };
+  }
+  
+  try {
+    const result = executeProcessor(processor, data.testData || {}, true);
+    return {
+      success: true,
+      data: result,
+      message: 'Test completed',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.toString(),
+      message: 'Test failed',
+    };
+  }
+}
+
+function handleTestProcessorDraft(data) {
+  if (!data.type || !data.config) {
+    return { success: false, error: 'type and config are required' };
+  }
+
+  const processor = {
+    name: '__draft__',
+    type: data.type,
+    config: data.config,
+  };
+
+  try {
+    const result = executeProcessor(processor, data.testData || {}, true);
+    return {
+      success: true,
+      data: result,
+      message: 'Test completed',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.toString(),
+      message: 'Test failed',
+    };
+  }
+}
+
+// ============================================================================
+// JOB HANDLERS (Updated for Processors)
+// ============================================================================
+
+function handleAddJob(data) {
+  const sheet = getOrCreateSheet(QUEUE_SHEET);
+  ensureJobHeaders(sheet);
+  
+  // Verify processor exists
+  const processorSheet = getSheet(ACTIONS_SHEET);
+  if (processorSheet) {
+    const processor = findProcessorByName(processorSheet, data.processor);
+    if (!processor) {
+      return { success: false, error: `Processor "${data.processor}" not found` };
+    }
+  }
+  
+  const job = {
+    id: generateUUID(),
+    queueName: data.queueName,
+    processor: data.processor,
+    data: JSON.stringify(data.data || {}),
+    state: data.opts?.delay ? 'delayed' : 'waiting',
+    priority: data.opts?.priority || 0,
+    attempts: 0,
+    maxAttempts: data.opts?.attempts || 3,
+    delay: data.opts?.delay || 0,
+    timestamp: new Date().toISOString(),
+    processedOn: null,
+    repeatJobKey: null,
+  };
+  
+  appendJob(sheet, job);
+  
+  return {
+    success: true,
+    data: { ...job, data: data.data || {} },
+    message: 'Job added successfully',
   };
 }
 
 function handleGetJobs(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+  const sheet = getSheet(QUEUE_SHEET);
   if (!sheet) {
     return { success: true, data: [] };
   }
-
-  const jobs = getAllJobs(sheet);
-  let filtered = jobs;
-
-  if (data.status) {
-    filtered = filtered.filter((j) => j.status === data.status);
+  
+  let jobs = getAllJobs(sheet);
+  
+  if (data.queueName) {
+    jobs = jobs.filter(j => j.queueName === data.queueName);
   }
-  if (data.queue) {
-    filtered = filtered.filter((j) => j.queue === data.queue);
+  if (data.state) {
+    jobs = jobs.filter(j => j.state === data.state);
   }
-  if (data.type) {
-    filtered = filtered.filter((j) => j.type === data.type);
+  if (data.processor) {
+    jobs = jobs.filter(j => j.processor === data.processor);
   }
-  if (data.search) {
-    const search = data.search.toLowerCase();
-    filtered = filtered.filter(
-      (j) =>
-        j.payload.toLowerCase().includes(search) ||
-        j.id.toLowerCase().includes(search)
-    );
-  }
-
-  return { success: true, data: filtered };
+  
+  return { success: true, data: jobs };
 }
 
 function handleGetJob(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+  const sheet = getSheet(QUEUE_SHEET);
   if (!sheet) {
-    return { success: false, error: 'Queue sheet not found' };
-  }
-
-  const job = findJobById(sheet, data.id);
-  if (!job) {
+    // Check graveyard
+    const graveyardSheet = getSheet(HISTORY_SHEET);
+    if (graveyardSheet) {
+      const job = findGraveyardJobById(graveyardSheet, data.id);
+      if (job) {
+        return { success: true, data: job, fromGraveyard: true };
+      }
+    }
     return { success: false, error: 'Job not found' };
   }
-
-  return { success: true, data: job };
+  
+  const job = findJobById(sheet, data.id);
+  if (!job) {
+    // Check graveyard
+    const graveyardSheet = getSheet(HISTORY_SHEET);
+    if (graveyardSheet) {
+      const graveyardJob = findGraveyardJobById(graveyardSheet, data.id);
+      if (graveyardJob) {
+        return { success: true, data: graveyardJob, fromGraveyard: true };
+      }
+    }
+    return { success: false, error: 'Job not found' };
+  }
+  
+  return { success: true, data: job, fromGraveyard: false };
 }
 
 function handleRetryJob(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+  // Check if job is in graveyard
+  const graveyardSheet = getSheet(HISTORY_SHEET);
+  if (graveyardSheet) {
+    const graveyardJob = findGraveyardJobById(graveyardSheet, data.id);
+    if (graveyardJob) {
+      // Move back to jobs
+      const jobsSheet = getOrCreateSheet(QUEUE_SHEET);
+      ensureJobHeaders(jobsSheet);
+      
+      const job = {
+        id: graveyardJob.id,
+        queueName: graveyardJob.queueName,
+        processor: graveyardJob.processor,
+        data: graveyardJob.data,
+        state: 'waiting',
+        priority: graveyardJob.priority,
+        attempts: 0,
+        maxAttempts: graveyardJob.maxAttempts,
+        delay: 0,
+        timestamp: new Date().toISOString(),
+        processedOn: null,
+        repeatJobKey: graveyardJob.repeatJobKey,
+      };
+      
+      appendJob(jobsSheet, job);
+      deleteGraveyardJobById(graveyardSheet, data.id);
+      
+      return { success: true, data: job };
+    }
+  }
+  
+  // Job is in active jobs
+  const sheet = getSheet(QUEUE_SHEET);
   if (!sheet) {
     return { success: false, error: 'Queue sheet not found' };
   }
-
-  const jobData = findJobById(sheet, data.id);
-  if (!jobData) {
-    return { success: false, error: 'Job not found' };
-  }
-
+  
   updateJobFields(sheet, data.id, {
-    status: 'pending',
-    retryCount: 0,
-    runAt: new Date().toISOString(),
-    lockedBy: null,
-    lockedAt: null,
-    lastError: null,
-    updatedAt: new Date().toISOString(),
+    state: 'waiting',
+    attempts: 0,
+    delay: 0,
+    processedOn: null,
   });
-
-  const updatedJob = findJobById(sheet, data.id);
-  return { success: true, data: updatedJob };
+  
+  const job = findJobById(sheet, data.id);
+  return { success: true, data: job };
 }
 
-function handleCancelJob(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+function handleRemoveJob(data) {
+  const sheet = getSheet(QUEUE_SHEET);
   if (!sheet) {
     return { success: false, error: 'Queue sheet not found' };
   }
-
-  updateJobFields(sheet, data.id, {
-    status: 'dead',
-    updatedAt: new Date().toISOString(),
-  });
-
-  const updatedJob = findJobById(sheet, data.id);
-  return { success: true, data: updatedJob };
-}
-
-function handleDeleteJob(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) {
-    return { success: false, error: 'Queue sheet not found' };
-  }
-
+  
   deleteJobById(sheet, data.id);
-  return { success: true, message: 'Job deleted' };
+  return { success: true, message: 'Job removed' };
 }
 
-function handleRetryFailedJobs(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) {
+function handleCleanJobs(data) {
+  // Clean completed/failed jobs from graveyard
+  const graveyardSheet = getSheet(HISTORY_SHEET);
+  if (!graveyardSheet) {
     return { success: true, data: { count: 0 } };
   }
-
-  const jobs = getAllJobs(sheet);
+  
+  const jobs = getAllGraveyardJobs(graveyardSheet);
   let count = 0;
-
-  jobs.forEach((job) => {
-    if ((job.status === 'failed' || job.status === 'dead') && 
-        (!data.queue || job.queue === data.queue)) {
-      updateJobFields(sheet, job.id, {
-        status: 'pending',
-        retryCount: 0,
-        runAt: new Date().toISOString(),
-        lockedBy: null,
-        lockedAt: null,
-        lastError: null,
-        updatedAt: new Date().toISOString(),
-      });
+  
+  jobs.forEach(job => {
+    const shouldClean = 
+      (data.state === 'completed' && job.state === 'completed') ||
+      (data.state === 'failed' && job.state === 'failed');
+    
+    if (shouldClean && (!data.queueName || job.queueName === data.queueName)) {
+      deleteGraveyardJobById(graveyardSheet, job.id);
       count++;
     }
   });
-
+  
   return { success: true, data: { count } };
 }
 
-function handleClearCompletedJobs(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+// ============================================================================
+// GRAVEYARD HANDLERS
+// ============================================================================
+
+function handleGetGraveyardJobs(data) {
+  const sheet = getSheet(HISTORY_SHEET);
+  if (!sheet) {
+    return { success: true, data: [] };
+  }
+  
+  let jobs = getAllGraveyardJobs(sheet);
+  
+  if (data.queueName) {
+    jobs = jobs.filter(j => j.queueName === data.queueName);
+  }
+  if (data.state) {
+    jobs = jobs.filter(j => j.state === data.state);
+  }
+  
+  return { success: true, data: jobs };
+}
+
+function handleCleanGraveyard(data) {
+  const sheet = getSheet(HISTORY_SHEET);
   if (!sheet) {
     return { success: true, data: { count: 0 } };
   }
+  
+  const beforeCount = sheet.getLastRow() - 1;
+  
+  if (data.olderThan) {
+    const cutoffDate = new Date(Date.now() - data.olderThan);
+    const jobs = getAllGraveyardJobs(sheet);
+    
+    let count = 0;
+    jobs.forEach(job => {
+      if (new Date(job.finishedOn) < cutoffDate) {
+        deleteGraveyardJobById(sheet, job.id);
+        count++;
+      }
+    });
+    
+    return { success: true, data: { count } };
+  }
+  
+  // Clear all
+  sheet.clear();
+  ensureGraveyardHeaders(sheet);
+  
+  return { success: true, data: { count: beforeCount } };
+}
 
-  const jobs = getAllJobs(sheet);
-  let count = 0;
+// ============================================================================
+// REPEATABLE HANDLERS (Updated for Processors)
+// ============================================================================
 
-  jobs.forEach((job) => {
-    if (job.status === 'completed' && (!data.queue || job.queue === data.queue)) {
-      deleteJobById(sheet, job.id);
-      count++;
+function handleAddRepeatableJob(data) {
+  const sheet = getOrCreateSheet(SCHEDULES_SHEET);
+  ensureRepeatableHeaders(sheet);
+  
+  // Verify processor exists
+  const processorSheet = getSheet(ACTIONS_SHEET);
+  if (processorSheet) {
+    const processor = findProcessorByName(processorSheet, data.processor);
+    if (!processor) {
+      return { success: false, error: `Processor "${data.processor}" not found` };
     }
-  });
+  }
+  
+  const key = `${data.queueName}::${data.processor}::${data.pattern}`;
+  
+  const existing = findRepeatableByKey(sheet, key);
+  if (existing) {
+    return { success: false, error: 'Repeatable job already exists' };
+  }
+  
+  const repeatable = {
+    key: key,
+    queueName: data.queueName,
+    processor: data.processor,
+    data: JSON.stringify(data.data || {}),
+    pattern: data.pattern,
+    enabled: true,
+    lastRun: null,
+    nextRun: calculateNextRun(data.pattern).toISOString(),
+  };
+  
+  appendRepeatable(sheet, repeatable);
+  
+  return {
+    success: true,
+    data: { ...repeatable, data: data.data || {} },
+    message: 'Repeatable job added successfully',
+  };
+}
 
-  return { success: true, data: { count } };
+function handleGetRepeatableJobs(data) {
+  const sheet = getSheet(SCHEDULES_SHEET);
+  if (!sheet) {
+    return { success: true, data: [] };
+  }
+  
+  let jobs = getAllRepeatableJobs(sheet);
+  
+  if (data.queueName) {
+    jobs = jobs.filter(j => j.queueName === data.queueName);
+  }
+  
+  return { success: true, data: jobs };
+}
+
+function handleRemoveRepeatableJob(data) {
+  const sheet = getSheet(SCHEDULES_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Schedules sheet not found' };
+  }
+  
+  deleteRepeatableByKey(sheet, data.key);
+  return { success: true, message: 'Repeatable job removed' };
+}
+
+function handleToggleRepeatableJob(data) {
+  const sheet = getSheet(SCHEDULES_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Schedules sheet not found' };
+  }
+  
+  updateRepeatableEnabled(sheet, data.key, data.enabled);
+  const job = findRepeatableByKey(sheet, data.key);
+  return { success: true, data: job };
+}
+
+// ============================================================================
+// QUEUE & STATS HANDLERS
+// ============================================================================
+
+function handleCreateQueue(data) {
+  const sheet = getOrCreateSheet(PIPELINES_SHEET);
+  ensureQueueHeaders(sheet);
+  
+  const existing = findQueueByName(sheet, data.name);
+  if (existing) {
+    return { success: false, error: 'Queue already exists' };
+  }
+  
+  const queue = {
+    name: data.name,
+    isPaused: false,
+    createdAt: new Date().toISOString(),
+  };
+  
+  appendQueue(sheet, queue);
+  
+  return {
+    success: true,
+    data: queue,
+    message: 'Queue created successfully',
+  };
 }
 
 function handleGetQueues(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
+  const sheet = getSheet(PIPELINES_SHEET);
   if (!sheet) {
     return { success: true, data: [] };
   }
-
-  const jobs = getAllJobs(sheet);
-  const queueMap = {};
-
-  jobs.forEach((job) => {
-    if (!queueMap[job.queue]) {
-      queueMap[job.queue] = {
-        name: job.queue,
-        isPaused: isQueuePaused(job.queue),
-        jobCounts: {
-          pending: 0,
-          processing: 0,
-          completed: 0,
-          failed: 0,
-          dead: 0,
-        },
-      };
-    }
-
-    const status = job.status;
-    if (queueMap[job.queue].jobCounts.hasOwnProperty(status)) {
-      queueMap[job.queue].jobCounts[status]++;
-    }
-  });
-
-  const queues = Object.values(queueMap);
+  
+  const queues = getAllQueues(sheet);
   return { success: true, data: queues };
 }
 
-function handleGetQueueStats(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) {
-    return { success: true, data: [] };
-  }
-
-  const jobs = getAllJobs(sheet);
-  const queueMap = {};
-
-  jobs.forEach((job) => {
-    if (!queueMap[job.queue]) {
-      queueMap[job.queue] = {
-        name: job.queue,
-        total: 0,
-        pending: 0,
-        processing: 0,
-        completed: 0,
-        failed: 0,
-        dead: 0,
-        isPaused: isQueuePaused(job.queue),
-      };
-    }
-
-    queueMap[job.queue].total++;
-    const status = job.status;
-    if (queueMap[job.queue].hasOwnProperty(status)) {
-      queueMap[job.queue][status]++;
-    }
-  });
-
-  let stats = Object.values(queueMap);
-  if (data.queueName) {
-    stats = stats.filter((s) => s.name === data.queueName);
-  }
-
-  return { success: true, data: stats };
-}
-
 function handlePauseQueue(data) {
-  setQueuePaused(data.queueName, true);
-  return { success: true, message: `Queue ${data.queueName} paused` };
+  const sheet = getSheet(PIPELINES_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Pipelines sheet not found' };
+  }
+  
+  updateQueuePaused(sheet, data.name, true);
+  return { success: true, message: `Queue ${data.name} paused` };
 }
 
 function handleResumeQueue(data) {
-  setQueuePaused(data.queueName, false);
-  return { success: true, message: `Queue ${data.queueName} resumed` };
+  const sheet = getSheet(PIPELINES_SHEET);
+  if (!sheet) {
+    return { success: false, error: 'Pipelines sheet not found' };
+  }
+  
+  updateQueuePaused(sheet, data.name, false);
+  return { success: true, message: `Queue ${data.name} resumed` };
+}
+
+function handleGetQueueStats(data) {
+  const queuesSheet = getSheet(PIPELINES_SHEET);
+  const jobsSheet = getSheet(QUEUE_SHEET);
+  
+  if (!queuesSheet || !jobsSheet) {
+    return { success: true, data: [] };
+  }
+  
+  const queues = getAllQueues(queuesSheet);
+  const jobs = getAllJobs(jobsSheet);
+  
+  const stats = queues.map(queue => {
+    const queueJobs = jobs.filter(j => j.queueName === queue.name);
+    return {
+      name: queue.name,
+      total: queueJobs.length,
+      waiting: queueJobs.filter(j => j.state === 'waiting').length,
+      active: queueJobs.filter(j => j.state === 'active').length,
+      delayed: queueJobs.filter(j => j.state === 'delayed').length,
+      isPaused: queue.isPaused,
+    };
+  });
+  
+  return { success: true, data: stats };
 }
 
 function handleGetWorkerStats(data) {
   const props = PropertiesService.getScriptProperties();
   const lastRun = props.getProperty('lastWorkerRun');
   const totalProcessed = parseInt(props.getProperty('totalProcessed') || '0');
-
+  
   return {
     success: true,
     data: {
@@ -371,158 +642,30 @@ function handleGetWorkerStats(data) {
   };
 }
 
-function handleGetCronJobs(data) {
-  const sheet = getSheet(CRON_SHEET_NAME);
-  if (!sheet) {
-    return { success: true, data: [] };
-  }
-
-  const cronJobs = getAllCronJobs(sheet);
-  return { success: true, data: cronJobs };
-}
-
-function handleCreateCronJob(data) {
-  const sheet = getOrCreateSheet(CRON_SHEET_NAME);
-  ensureCronHeaders(sheet);
-
-  const cronJob = {
-    id: generateUUID(),
-    name: data.name,
-    queue: data.queue || 'default',
-    cronExpression: data.cronExpression,
-    payload: JSON.stringify({
-      url: data.url,
-      method: data.method || 'POST',
-      headers: data.headers || {},
-      body: data.body || null,
-    }),
-    enabled: true,
-    lastRun: null,
-    nextRun: null,
-  };
-
-  appendCronJob(sheet, cronJob);
-
-  return {
-    success: true,
-    data: cronJob,
-    message: 'Cron job created successfully',
-  };
-}
-
-function handleDeleteCronJob(data) {
-  const sheet = getSheet(CRON_SHEET_NAME);
-  if (!sheet) {
-    return { success: false, error: 'CronJobs sheet not found' };
-  }
-
-  deleteCronJobById(sheet, data.id);
-  return { success: true, message: 'Cron job deleted' };
-}
-
-function handleToggleCronJob(data) {
-  const sheet = getSheet(CRON_SHEET_NAME);
-  if (!sheet) {
-    return { success: false, error: 'CronJobs sheet not found' };
-  }
-
-  toggleCronJobById(sheet, data.id, data.enabled);
-  const cronJob = findCronJobById(sheet, data.id);
-  return { success: true, data: cronJob };
-}
-
-function handleTestJob(data) {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) {
-    return { success: false, error: 'Queue sheet not found' };
-  }
-
-  const originalJob = findJobById(sheet, data.id);
-  if (!originalJob) {
-    return { success: false, error: 'Job not found' };
-  }
-
-  Logger.log('Testing job ' + data.id);
-  
-  try {
-    const payload = typeof originalJob.payload === 'string' 
-      ? JSON.parse(originalJob.payload) 
-      : originalJob.payload;
-    
-    Logger.log('Payload: ' + JSON.stringify(payload));
-    
-    const options = {
-      method: payload.method,
-      headers: payload.headers || {},
-      muteHttpExceptions: true,
-    };
-
-    if (payload.body && payload.method !== 'GET') {
-      options.payload = JSON.stringify(payload.body);
-      if (!options.headers['Content-Type']) {
-        options.headers['Content-Type'] = 'application/json';
-      }
-    }
-
-    Logger.log('Fetching URL: ' + payload.url);
-    const response = UrlFetchApp.fetch(payload.url, options);
-    const statusCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    
-    Logger.log('Response status: ' + statusCode);
-    Logger.log('Response body: ' + responseText.substring(0, 500));
-
-    return {
-      success: statusCode >= 200 && statusCode < 400,
-      data: {
-        statusCode: statusCode,
-        statusText: response.getResponseCode() + ' ' + 
-          (statusCode >= 200 && statusCode < 300 ? 'OK' : 
-           statusCode >= 300 && statusCode < 400 ? 'Redirect' :
-           statusCode >= 400 && statusCode < 500 ? 'Client Error' :
-           'Server Error'),
-        responseBody: responseText.substring(0, 1000),
-        executedAt: new Date().toISOString(),
-      },
-      message: statusCode >= 200 && statusCode < 400 
-        ? 'Test successful' 
-        : 'Test failed with HTTP ' + statusCode,
-    };
-  } catch (error) {
-    Logger.log('Test error: ' + error.toString());
-    return {
-      success: false,
-      error: error.toString(),
-      message: 'Test failed: ' + error.toString(),
-    };
-  }
-}
-
 // ============================================================================
-// WORKER / PROCESSOR (Triggered every minute)
+// WORKER (Triggered every minute)
 // ============================================================================
 
 function processQueue() {
   const lock = LockService.getScriptLock();
-
+  
   try {
     if (!lock.tryLock(30000)) {
-      Logger.log('Could not acquire lock, another process is running');
+      Logger.log('Could not acquire lock');
       return;
     }
   } catch (e) {
     Logger.log('Lock acquisition failed: ' + e.toString());
     return;
   }
-
+  
   try {
     const props = PropertiesService.getScriptProperties();
     props.setProperty('lastWorkerRun', new Date().toISOString());
-
-    recoverStaleLocks();
-    scheduleCronJobs();
+    
+    processRepeatableJobs();
     processEligibleJobs();
-
+    
     const totalProcessed = parseInt(props.getProperty('totalProcessed') || '0');
     props.setProperty('totalProcessed', (totalProcessed + 1).toString());
   } catch (error) {
@@ -532,405 +675,723 @@ function processQueue() {
   }
 }
 
+function processRepeatableJobs() {
+  const repeatableSheet = getSheet(SCHEDULES_SHEET);
+  if (!repeatableSheet) return;
+  
+  const jobsSheet = getOrCreateSheet(QUEUE_SHEET);
+  ensureJobHeaders(jobsSheet);
+  
+  const repeatables = getAllRepeatableJobs(repeatableSheet);
+  const now = new Date();
+  
+  repeatables.forEach(repeatable => {
+    if (!repeatable.enabled) return;
+    
+    const nextRun = repeatable.nextRun ? new Date(repeatable.nextRun) : null;
+    if (!nextRun || now >= nextRun) {
+      const job = {
+        id: generateUUID(),
+        queueName: repeatable.queueName,
+        processor: repeatable.processor,
+        data: repeatable.data,
+        state: 'waiting',
+        priority: 0,
+        attempts: 0,
+        maxAttempts: 3,
+        delay: 0,
+        timestamp: new Date().toISOString(),
+        processedOn: null,
+        repeatJobKey: repeatable.key,
+      };
+      
+      appendJob(jobsSheet, job);
+      
+      const newNextRun = calculateNextRun(repeatable.pattern);
+      updateRepeatableNextRun(repeatableSheet, repeatable.key, now.toISOString(), newNextRun.toISOString());
+      
+      Logger.log(`Created job from repeatable: ${repeatable.key}`);
+    }
+  });
+}
+
 function processEligibleJobs() {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) {
-    Logger.log('Queue sheet not found');
-    return;
-  }
-
-  const jobs = getEligibleJobs(sheet);
+  const jobsSheet = getSheet(QUEUE_SHEET);
+  if (!jobsSheet) return;
+  
+  const queuesSheet = getSheet(PIPELINES_SHEET);
+  const pausedQueues = queuesSheet ? getAllQueues(queuesSheet).filter(q => q.isPaused).map(q => q.name) : [];
+  
+  const jobs = getEligibleJobs(jobsSheet);
   Logger.log(`Found ${jobs.length} eligible jobs`);
-
-  jobs.slice(0, MAX_JOBS_PER_RUN).forEach((job) => {
-    if (isQueuePaused(job.queue)) {
-      Logger.log(`Queue ${job.queue} is paused, skipping job ${job.id}`);
+  
+  jobs.slice(0, MAX_JOBS_PER_RUN).forEach(job => {
+    if (pausedQueues.includes(job.queueName)) {
+      Logger.log(`Queue ${job.queueName} is paused, skipping job ${job.id}`);
       return;
     }
-
-    executeJob(sheet, job);
+    
+    executeJob(jobsSheet, job);
   });
 }
 
 function getEligibleJobs(sheet) {
   const jobs = getAllJobs(sheet);
-  const now = new Date().getTime();
-
+  const now = Date.now();
+  
   return jobs
-    .filter((job) => {
-      return (
-        job.status === 'pending' &&
-        !job.lockedBy &&
-        new Date(job.runAt).getTime() <= now
-      );
+    .filter(job => {
+      if (job.state === 'waiting') return true;
+      if (job.state === 'delayed' && new Date(job.timestamp).getTime() + job.delay <= now) return true;
+      return false;
     })
     .sort((a, b) => {
       if (a.priority !== b.priority) {
         return b.priority - a.priority;
       }
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
     });
 }
 
 function executeJob(sheet, job) {
-  const executionId = generateUUID();
   const now = new Date().toISOString();
-
+  
   updateJobFields(sheet, job.id, {
-    status: 'processing',
-    lockedBy: executionId,
-    lockedAt: now,
-    updatedAt: now,
+    state: 'active',
+    processedOn: now,
   });
-
-  Logger.log(`Executing job ${job.id}`);
-
+  
+  Logger.log(`Executing job ${job.id} with processor ${job.processor}`);
+  
   try {
-    // job.payload is already an object from rowToJob, no need to parse
-    const payload = typeof job.payload === 'string' ? JSON.parse(job.payload) : job.payload;
-    
-    Logger.log(`Payload: ${JSON.stringify(payload)}`);
-    Logger.log(`URL: ${payload.url}`);
-    Logger.log(`Method: ${payload.method}`);
-    
-    const options = {
-      method: payload.method,
-      headers: payload.headers || {},
-      muteHttpExceptions: true,
-    };
-
-    if (payload.body && payload.method !== 'GET') {
-      options.payload = JSON.stringify(payload.body);
-      if (!options.headers['Content-Type']) {
-        options.headers['Content-Type'] = 'application/json';
-      }
+    // Look up processor
+    const processorSheet = getSheet(ACTIONS_SHEET);
+    if (!processorSheet) {
+      throw new Error('Actions sheet not found');
     }
-
-    Logger.log(`Fetching URL: ${payload.url}`);
-    const response = UrlFetchApp.fetch(payload.url, options);
-    const statusCode = response.getResponseCode();
-    Logger.log(`Response status: ${statusCode}`);
-
-    if (statusCode >= 200 && statusCode < 400) {
-      updateJobFields(sheet, job.id, {
-        status: 'completed',
-        lockedBy: null,
-        lockedAt: null,
-        completedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      Logger.log(`Job ${job.id} completed successfully`);
-    } else {
-      handleJobFailure(
-        sheet,
-        job,
-        `HTTP ${statusCode}: ${response.getContentText().substring(0, 200)}`
-      );
+    
+    const processor = findProcessorByName(processorSheet, job.processor);
+    if (!processor) {
+      throw new Error(`Processor "${job.processor}" not found`);
     }
+    
+    // Parse job data
+    const jobData = typeof job.data === 'string' ? JSON.parse(job.data) : job.data;
+    
+    // Execute processor
+    const result = executeProcessor(processor, jobData, false);
+    
+    // Move to graveyard
+    moveToGraveyard(job, {
+      state: 'completed',
+      finishedOn: new Date().toISOString(),
+      returnvalue: JSON.stringify(result),
+      failedReason: null,
+    });
+    
+    Logger.log(`Job ${job.id} completed successfully`);
   } catch (error) {
-    Logger.log(`Job execution error: ${error.toString()}`);
+    Logger.log(`Job ${job.id} failed: ${error.toString()}`);
     handleJobFailure(sheet, job, error.toString());
   }
 }
 
-function handleJobFailure(sheet, job, errorMessage) {
-  const newRetryCount = job.retryCount + 1;
+function executeProcessor(processor, jobData, isDryRun) {
+  const config = typeof processor.config === 'string' ? JSON.parse(processor.config) : processor.config;
+  const normalizedData = normalizeJobData(jobData);
 
-  if (newRetryCount < job.maxRetries) {
-    const delayMinutes = Math.pow(2, newRetryCount);
-    const runAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-
-    updateJobFields(sheet, job.id, {
-      status: 'pending',
-      retryCount: newRetryCount,
-      runAt: runAt,
-      lockedBy: null,
-      lockedAt: null,
-      lastError: errorMessage,
-      updatedAt: new Date().toISOString(),
-    });
-
-    Logger.log(`Job ${job.id} failed, will retry in ${delayMinutes} minutes`);
+  if (processor.type === 'script') {
+    return executeScript(config.script, normalizedData, isDryRun);
+  } else if (processor.type === 'http') {
+    return executeHttp(config, normalizedData);
   } else {
-    updateJobFields(sheet, job.id, {
-      status: 'dead',
-      retryCount: newRetryCount,
-      lockedBy: null,
-      lockedAt: null,
-      lastError: errorMessage,
-      updatedAt: new Date().toISOString(),
-    });
-
-    Logger.log(`Job ${job.id} moved to dead letter queue`);
+    throw new Error(`Unknown processor type: ${processor.type}`);
   }
 }
 
-function recoverStaleLocks() {
-  const sheet = getSheet(QUEUE_SHEET_NAME);
-  if (!sheet) return;
+function executeScript(scriptCode, jobData, isDryRun) {
+  const logs = [];
+  const outputs = [];
+  
+  const helpers = createScriptHelpers(logs, outputs, isDryRun);
+  
+  const wrappedScript = `
+    (function(data, fetch, log, addJob, getProperty, setProperty, parseJSON, stringifyJSON, sleep) {
+      ${scriptCode}
+    })
+  `;
+  
+  const scriptFunction = eval(wrappedScript);
+  const result = scriptFunction(
+    jobData,
+    helpers.fetch,
+    helpers.log,
+    helpers.addJob,
+    helpers.getProperty,
+    helpers.setProperty,
+    helpers.parseJSON,
+    helpers.stringifyJSON,
+    helpers.sleep
+  );
+  
+  return {
+    result: result,
+    logs: logs,
+    outputs: outputs,
+  };
+}
 
-  const jobs = getAllJobs(sheet);
-  const now = Date.now();
+function normalizeJobData(jobData) {
+  return parseJobData(jobData);
+}
 
-  jobs.forEach((job) => {
-    if (job.lockedBy && job.lockedAt) {
-      const lockAge = now - new Date(job.lockedAt).getTime();
-      if (lockAge > LOCK_TIMEOUT_MS) {
-        Logger.log(`Recovering stale lock for job ${job.id}`);
-        updateJobFields(sheet, job.id, {
-          status: 'pending',
-          lockedBy: null,
-          lockedAt: null,
-          updatedAt: new Date().toISOString(),
-        });
+function serializeJobData(data) {
+  if (data === null || data === undefined || data === '') return '{}';
+  if (typeof data === 'string') {
+    try {
+      JSON.parse(data);
+      return data;
+    } catch (e) {
+      return JSON.stringify({ _raw: data });
+    }
+  }
+  try {
+    return JSON.stringify(data);
+  } catch (e) {
+    return '{}';
+  }
+}
+
+function parseJobData(raw) {
+  if (raw === null || raw === undefined || raw === '') return {};
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = String(raw).trim();
+    if (!trimmed || trimmed === '[object Object]') return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        try {
+          const twice = JSON.parse(parsed);
+          if (twice && typeof twice === 'object' && !Array.isArray(twice)) return twice;
+        } catch (e2) { /* keep single parse */ }
+        return { _value: parsed };
       }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      return { _value: parsed };
+    } catch (e) {
+      return { _raw: trimmed };
     }
-  });
+  }
+  return {};
 }
 
-// ============================================================================
-// CRON JOB SCHEDULER
-// ============================================================================
-
-function scheduleCronJobs() {
-  const cronSheet = getSheet(CRON_SHEET_NAME);
-  if (!cronSheet) return;
-
-  const cronJobs = getAllCronJobs(cronSheet);
-  const now = new Date();
-
-  cronJobs.forEach((cronJob) => {
-    if (!cronJob.enabled) return;
-
-    const nextRun = cronJob.nextRun ? new Date(cronJob.nextRun) : null;
-    if (!nextRun || now >= nextRun) {
-      createJobFromCron(cronJob);
-      updateCronJobNextRun(cronSheet, cronJob);
-    }
+function templateString(str, jobData) {
+  if (typeof str !== 'string') return str;
+  let result = str;
+  Object.keys(jobData).forEach(function(key) {
+    const val = jobData[key];
+    if (val === undefined || val === null) return;
+    const replacement = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    const regex = new RegExp('\\{' + key + '\\}', 'g');
+    result = result.replace(regex, replacement);
   });
+  return result;
 }
 
-function createJobFromCron(cronJob) {
-  const sheet = getOrCreateSheet(QUEUE_SHEET_NAME);
-  ensureHeaders(sheet);
+function applyTemplate(value, jobData) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return templateString(value, jobData);
+  if (Array.isArray(value)) {
+    return value.map(function(item) { return applyTemplate(item, jobData); });
+  }
+  if (typeof value === 'object') {
+    const out = {};
+    Object.keys(value).forEach(function(k) {
+      out[k] = applyTemplate(value[k], jobData);
+    });
+    return out;
+  }
+  return value;
+}
 
-  const job = {
-    id: generateUUID(),
-    queue: cronJob.queue,
-    type: 'cron',
-    payload: cronJob.payload,
-    status: 'pending',
-    priority: 5,
-    retryCount: 0,
-    maxRetries: 3,
-    runAt: new Date().toISOString(),
-    lockedBy: null,
-    lockedAt: null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastError: null,
-    completedAt: null,
+function parseHttpBodyTemplate(body) {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch (e) {
+      return body;
+    }
+  }
+  return body;
+}
+
+function executeHttp(config, jobData) {
+  jobData = normalizeJobData(jobData);
+
+  const options = {
+    method: config.method,
+    headers: config.headers || {},
+    muteHttpExceptions: true,
   };
 
-  appendJob(sheet, job);
-  Logger.log(`Created job from cron ${cronJob.name}`);
-}
+  const url = templateString(String(config.url || ''), jobData);
 
-function updateCronJobNextRun(sheet, cronJob) {
-  const nextRun = calculateNextRun(cronJob.cronExpression);
-  const rowIndex = findCronJobRowIndex(sheet, cronJob.id);
-
-  if (rowIndex > 0) {
-    sheet.getRange(rowIndex, 7).setValue(new Date().toISOString());
-    sheet.getRange(rowIndex, 8).setValue(nextRun.toISOString());
-  }
-}
-
-function calculateNextRun(cronExpression) {
-  const now = new Date();
-  const parts = cronExpression.split('-');
-
-  if (parts[0] === 'every' && parts[2] === 'minutes') {
-    const minutes = parseInt(parts[1]);
-    return new Date(now.getTime() + minutes * 60 * 1000);
+  if (config.headers) {
+    options.headers = applyTemplate(
+      JSON.parse(JSON.stringify(config.headers)),
+      jobData
+    );
   }
 
-  if (parts[0] === 'every' && parts[2] === 'hours') {
-    const hours = parseInt(parts[1]);
-    return new Date(now.getTime() + hours * 60 * 60 * 1000);
-  }
+  if (config.body && config.method !== 'GET') {
+    const bodyTemplate = parseHttpBodyTemplate(config.body);
+    const templatedBody = applyTemplate(bodyTemplate, jobData);
+    options.payload = typeof templatedBody === 'string'
+      ? templatedBody
+      : JSON.stringify(templatedBody);
 
-  if (parts[0] === 'daily') {
-    const timeParts = parts[1].split(':');
-    const hour = parseInt(timeParts[0]);
-    const minute = parseInt(timeParts[1]);
-
-    const next = new Date(now);
-    next.setUTCHours(hour, minute, 0, 0);
-
-    if (next <= now) {
-      next.setUTCDate(next.getUTCDate() + 1);
+    if (!options.headers['Content-Type']) {
+      options.headers['Content-Type'] = 'application/json';
     }
-
-    return next;
   }
 
-  return new Date(now.getTime() + 60 * 60 * 1000);
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+  
+  if (statusCode < 200 || statusCode >= 400) {
+    throw new Error(`HTTP ${statusCode}: ${response.getContentText().substring(0, 200)}`);
+  }
+  
+  return {
+    statusCode: statusCode,
+    body: response.getContentText(),
+  };
 }
 
-function getAllCronJobs(sheet) {
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const jobs = [];
+function createScriptHelpers(logs, outputs, isDryRun) {
+  return {
+    fetch: function(url, options) {
+      options = options || {};
+      const fetchOptions = {
+        method: options.method || 'GET',
+        headers: options.headers || {},
+        muteHttpExceptions: true,
+      };
+      
+      if (options.body && fetchOptions.method !== 'GET') {
+        fetchOptions.payload = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+        if (!fetchOptions.headers['Content-Type']) {
+          fetchOptions.headers['Content-Type'] = 'application/json';
+        }
+      }
+      
+      const response = UrlFetchApp.fetch(url, fetchOptions);
+      const result = {
+        status: response.getResponseCode(),
+        statusText: response.getResponseCode() >= 200 && response.getResponseCode() < 300 ? 'OK' : 'Error',
+        body: response.getContentText(),
+        headers: response.getAllHeaders(),
+      };
+      
+      outputs.push(`fetch(${url}) → ${result.status}`);
+      return result;
+    },
+    
+    log: function(message) {
+      const logMessage = typeof message === 'object' ? JSON.stringify(message) : String(message);
+      logs.push(logMessage);
+      Logger.log('[Script] ' + logMessage);
+    },
+    
+    addJob: function(queueName, processor, data, opts) {
+      if (isDryRun) {
+        logs.push(`[DRY RUN] Would add job: ${queueName}::${processor}`);
+        return { id: 'dry-run-' + generateUUID() };
+      }
+      
+      const jobsSheet = getOrCreateSheet(QUEUE_SHEET);
+      ensureJobHeaders(jobsSheet);
+      
+      const job = {
+        id: generateUUID(),
+        queueName: queueName,
+        processor: processor,
+        data: JSON.stringify(data),
+        state: opts?.delay ? 'delayed' : 'waiting',
+        priority: opts?.priority || 0,
+        attempts: 0,
+        maxAttempts: opts?.attempts || 3,
+        delay: opts?.delay || 0,
+        timestamp: new Date().toISOString(),
+        processedOn: null,
+        repeatJobKey: null,
+      };
+      
+      appendJob(jobsSheet, job);
+      Logger.log('[Script] Created job: ' + job.id);
+      return { id: job.id };
+    },
+    
+    getProperty: function(key) {
+      return PropertiesService.getScriptProperties().getProperty(key);
+    },
+    
+    setProperty: function(key, value) {
+      if (isDryRun) {
+        logs.push(`[DRY RUN] Would set property ${key} = ${value}`);
+      } else {
+        PropertiesService.getScriptProperties().setProperty(key, value);
+      }
+    },
+    
+    parseJSON: function(str) {
+      return JSON.parse(str);
+    },
+    
+    stringifyJSON: function(obj) {
+      return JSON.stringify(obj);
+    },
+    
+    sleep: function(ms) {
+      if (isDryRun) {
+        logs.push(`[Sleeping ${ms}ms]`);
+        Utilities.sleep(Math.min(ms, 5000));
+      } else {
+        Utilities.sleep(ms);
+      }
+    },
+  };
+}
 
+function handleJobFailure(sheet, job, errorMessage) {
+  const newAttempts = job.attempts + 1;
+  
+  if (newAttempts < job.maxAttempts) {
+    const delayMs = Math.pow(2, newAttempts) * 60 * 1000;
+    
+    updateJobFields(sheet, job.id, {
+      state: 'delayed',
+      attempts: newAttempts,
+      delay: delayMs,
+    });
+    
+    Logger.log(`Job ${job.id} will retry in ${delayMs/1000}s`);
+  } else {
+    // Move to graveyard
+    moveToGraveyard(job, {
+      state: 'failed',
+      finishedOn: new Date().toISOString(),
+      returnvalue: null,
+      failedReason: errorMessage,
+    });
+    
+    Logger.log(`Job ${job.id} failed permanently, moved to graveyard`);
+  }
+}
+
+function moveToGraveyard(job, finalState) {
+  const graveyardSheet = getOrCreateSheet(HISTORY_SHEET);
+  ensureGraveyardHeaders(graveyardSheet);
+  
+  const graveyardJob = {
+    id: job.id,
+    queueName: job.queueName,
+    processor: job.processor,
+    data: job.data,
+    state: finalState.state,
+    priority: job.priority,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    timestamp: job.timestamp,
+    processedOn: job.processedOn,
+    finishedOn: finalState.finishedOn,
+    failedReason: finalState.failedReason,
+    returnvalue: finalState.returnvalue,
+    repeatJobKey: job.repeatJobKey,
+  };
+  
+  appendGraveyardJob(graveyardSheet, graveyardJob);
+  
+  // Remove from jobs
+  const jobsSheet = getSheet(QUEUE_SHEET);
+  if (jobsSheet) {
+    deleteJobById(jobsSheet, job.id);
+  }
+}
+
+// ============================================================================
+// SHEET HELPERS - PIPELINES (was: Queues)
+// ============================================================================
+
+function ensureQueueHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = ['name', 'isPaused', 'createdAt'];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#1a73e8')
+             .setFontColor('#ffffff');
+
+  sheet.setColumnWidth(1, 180);
+  sheet.setColumnWidth(2, 100);
+  sheet.setColumnWidth(3, 200);
+  sheet.setFrozenRows(1);
+  sheet.setTabColor('#1a73e8');
+}
+
+function getAllQueues(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  
+  const queues = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     if (!row[0]) continue;
-
-    jobs.push({
-      id: row[0],
-      name: row[1],
-      queue: row[2],
-      cronExpression: row[3],
-      payload: row[4],
-      enabled: row[5],
-      lastRun: row[6] || null,
-      nextRun: row[7] || null,
+    
+    queues.push({
+      name: row[0],
+      isPaused: row[1],
+      createdAt: row[2],
     });
   }
-
-  return jobs;
+  
+  return queues;
 }
 
-function findCronJobRowIndex(sheet, id) {
+function findQueueByName(sheet, name) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === id) {
-      return i + 1;
+    if (data[i][0] === name) {
+      return {
+        name: data[i][0],
+        isPaused: data[i][1],
+        createdAt: data[i][2],
+      };
     }
   }
-  return -1;
+  return null;
+}
+
+function appendQueue(sheet, queue) {
+  sheet.appendRow([queue.name, queue.isPaused, queue.createdAt]);
+}
+
+function updateQueuePaused(sheet, name, isPaused) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === name) {
+      sheet.getRange(i + 1, 2).setValue(isPaused);
+      break;
+    }
+  }
 }
 
 // ============================================================================
-// SHEET HELPERS
+// SHEET HELPERS - ACTIONS (was: Processors)
 // ============================================================================
 
-function getSheet(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+function ensureProcessorHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = ['name', 'type', 'config', 'description', 'createdAt'];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#8430ce')
+             .setFontColor('#ffffff');
+
+  sheet.setColumnWidth(1, 180);
+  sheet.setColumnWidth(2, 80);
+  sheet.setColumnWidth(3, 400);
+  sheet.setColumnWidth(4, 240);
+  sheet.setColumnWidth(5, 200);
+  sheet.setFrozenRows(1);
+  sheet.setTabColor('#8430ce');
 }
 
-function getOrCreateSheet(name) {
-  let sheet = getSheet(name);
-  if (!sheet) {
-    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(name);
+function getAllProcessors(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  
+  const processors = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0]) continue;
+    
+    let config;
+    try {
+      config = typeof row[2] === 'string' ? JSON.parse(row[2]) : row[2];
+    } catch (e) {
+      config = {};
+    }
+    
+    processors.push({
+      name: row[0],
+      type: row[1],
+      config: config,
+      description: row[3] || '',
+      createdAt: row[4],
+    });
   }
-  return sheet;
+  
+  return processors;
 }
 
-function ensureHeaders(sheet) {
-  if (sheet.getLastRow() === 0) {
-    const headers = [
-      'id',
-      'queue',
-      'type',
-      'payload',
-      'status',
-      'priority',
-      'retryCount',
-      'maxRetries',
-      'runAt',
-      'lockedBy',
-      'lockedAt',
-      'createdAt',
-      'updatedAt',
-      'lastError',
-      'completedAt',
-    ];
-    sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+function findProcessorByName(sheet, name) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === name) {
+      let config;
+      try {
+        config = typeof data[i][2] === 'string' ? JSON.parse(data[i][2]) : data[i][2];
+      } catch (e) {
+        config = {};
+      }
+      
+      return {
+        name: data[i][0],
+        type: data[i][1],
+        config: config,
+        description: data[i][3] || '',
+        createdAt: data[i][4],
+      };
+    }
   }
+  return null;
+}
+
+function appendProcessor(sheet, processor) {
+  sheet.appendRow([
+    processor.name,
+    processor.type,
+    processor.config,
+    processor.description,
+    processor.createdAt
+  ]);
+}
+
+function updateProcessor(sheet, name, updates) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === name) {
+      const rowNum = i + 1;
+      
+      if (updates.hasOwnProperty('config')) sheet.getRange(rowNum, 3).setValue(updates.config);
+      if (updates.hasOwnProperty('description')) sheet.getRange(rowNum, 4).setValue(updates.description);
+      
+      break;
+    }
+  }
+}
+
+function deleteProcessorByName(sheet, name) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === name) {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+}
+
+// ============================================================================
+// SHEET HELPERS - QUEUE (was: Jobs)
+// ============================================================================
+
+function ensureJobHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = [
+    'id', 'pipeline', 'action', 'data', 'state', 'priority', 'attempts',
+    'maxAttempts', 'delay', 'createdAt', 'startedAt', 'scheduleKey'
+  ];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#1e8e3e')
+             .setFontColor('#ffffff');
+
+  sheet.setColumnWidth(1, 280);
+  sheet.setColumnWidth(2, 150);
+  sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 300);
+  sheet.setColumnWidth(5, 100);
+  sheet.setColumnWidth(6, 80);
+  sheet.setColumnWidth(7, 90);
+  sheet.setColumnWidth(8, 110);
+  sheet.setColumnWidth(9, 80);
+  sheet.setColumnWidth(10, 200);
+  sheet.setColumnWidth(11, 200);
+  sheet.setColumnWidth(12, 280);
+  sheet.setFrozenRows(1);
+  sheet.setTabColor('#1e8e3e');
+
+  // Conditional formatting for the state column (col 5)
+  const stateRange = sheet.getRange('E2:E1000');
+  const rules = [
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('waiting')
+      .setBackground('#fef08a').setFontColor('#713f12')
+      .setRanges([stateRange]).build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('active')
+      .setBackground('#bbf7d0').setFontColor('#14532d')
+      .setRanges([stateRange]).build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('delayed')
+      .setBackground('#e0e7ff').setFontColor('#312e81')
+      .setRanges([stateRange]).build(),
+  ];
+  sheet.setConditionalFormatRules(rules);
 }
 
 function getAllJobs(sheet) {
   const data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
-
+  
   const jobs = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     if (!row[0]) continue;
-
+    
     jobs.push(rowToJob(row));
   }
-
+  
   return jobs;
 }
 
 function rowToJob(row) {
-  let payload;
-  try {
-    if (typeof row[3] === 'string') {
-      if (row[3] === '[object Object]' || row[3] === '') {
-        payload = { url: '', method: 'GET', headers: {}, body: null };
-      } else {
-        payload = JSON.parse(row[3]);
-      }
-    } else if (typeof row[3] === 'object') {
-      payload = row[3];
-    } else {
-      payload = { url: '', method: 'GET', headers: {}, body: null };
-    }
-  } catch (e) {
-    Logger.log('Error parsing payload for job ' + row[0] + ': ' + e.toString());
-    payload = { url: '', method: 'GET', headers: {}, body: null };
-  }
+  const data = parseJobData(row[3]);
 
   return {
     id: row[0],
-    queue: row[1],
-    type: row[2],
-    payload: payload,
-    status: row[4],
+    queueName: row[1],
+    processor: row[2],
+    data: data,
+    state: row[4],
     priority: row[5],
-    retryCount: row[6],
-    maxRetries: row[7],
-    runAt: row[8],
-    lockedBy: row[9] || null,
-    lockedAt: row[10] || null,
-    createdAt: row[11],
-    updatedAt: row[12],
-    lastError: row[13] || null,
-    completedAt: row[14] || null,
+    attempts: row[6],
+    maxAttempts: row[7],
+    delay: row[8],
+    timestamp: row[9],
+    processedOn: row[10] || null,
+    repeatJobKey: row[11] || null,
   };
 }
 
 function appendJob(sheet, job) {
-  Logger.log('=== appendJob ===');
-  Logger.log('Payload being appended: ' + job.payload);
-  Logger.log('Payload type: ' + typeof job.payload);
-  
-  const row = [
-    job.id,
-    job.queue,
-    job.type,
-    job.payload,
-    job.status,
-    job.priority,
-    job.retryCount,
-    job.maxRetries,
-    job.runAt,
-    job.lockedBy,
-    job.lockedAt,
-    job.createdAt,
-    job.updatedAt,
-    job.lastError,
-    job.completedAt,
-  ];
-  
-  Logger.log('Row data: ' + JSON.stringify(row));
-  sheet.appendRow(row);
-  Logger.log('Row appended successfully');
+  sheet.appendRow([
+    job.id, job.queueName, job.processor, serializeJobData(job.data), job.state, job.priority,
+    job.attempts, job.maxAttempts, job.delay, job.timestamp, job.processedOn,
+    job.repeatJobKey
+  ]);
 }
 
 function findJobById(sheet, id) {
@@ -948,24 +1409,12 @@ function updateJobFields(sheet, id, updates) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] === id) {
       const rowNum = i + 1;
-
-      if (updates.hasOwnProperty('status'))
-        sheet.getRange(rowNum, 5).setValue(updates.status);
-      if (updates.hasOwnProperty('retryCount'))
-        sheet.getRange(rowNum, 7).setValue(updates.retryCount);
-      if (updates.hasOwnProperty('runAt'))
-        sheet.getRange(rowNum, 9).setValue(updates.runAt);
-      if (updates.hasOwnProperty('lockedBy'))
-        sheet.getRange(rowNum, 10).setValue(updates.lockedBy);
-      if (updates.hasOwnProperty('lockedAt'))
-        sheet.getRange(rowNum, 11).setValue(updates.lockedAt);
-      if (updates.hasOwnProperty('updatedAt'))
-        sheet.getRange(rowNum, 13).setValue(updates.updatedAt);
-      if (updates.hasOwnProperty('lastError'))
-        sheet.getRange(rowNum, 14).setValue(updates.lastError);
-      if (updates.hasOwnProperty('completedAt'))
-        sheet.getRange(rowNum, 15).setValue(updates.completedAt);
-
+      
+      if (updates.hasOwnProperty('state')) sheet.getRange(rowNum, 5).setValue(updates.state);
+      if (updates.hasOwnProperty('attempts')) sheet.getRange(rowNum, 7).setValue(updates.attempts);
+      if (updates.hasOwnProperty('delay')) sheet.getRange(rowNum, 9).setValue(updates.delay);
+      if (updates.hasOwnProperty('processedOn')) sheet.getRange(rowNum, 11).setValue(updates.processedOn);
+      
       break;
     }
   }
@@ -982,92 +1431,114 @@ function deleteJobById(sheet, id) {
 }
 
 // ============================================================================
-// QUEUE PAUSE/RESUME
+// SHEET HELPERS - HISTORY (was: JobsGraveyard)
 // ============================================================================
 
-function isQueuePaused(queueName) {
-  const props = PropertiesService.getScriptProperties();
-  const pausedQueues = props.getProperty('pausedQueues') || '[]';
-  const queues = JSON.parse(pausedQueues);
-  return queues.includes(queueName);
+function ensureGraveyardHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = [
+    'id', 'pipeline', 'action', 'data', 'result', 'priority', 'attempts',
+    'maxAttempts', 'createdAt', 'startedAt', 'finishedAt', 'failReason',
+    'returnValue', 'scheduleKey'
+  ];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#5f6368')
+             .setFontColor('#ffffff');
+
+  sheet.setColumnWidth(1, 280);
+  sheet.setColumnWidth(2, 150);
+  sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 300);
+  sheet.setColumnWidth(5, 100);
+  sheet.setColumnWidth(10, 200);
+  sheet.setColumnWidth(11, 200);
+  sheet.setColumnWidth(12, 300);
+  sheet.setFrozenRows(1);
+  sheet.setTabColor('#5f6368');
+
+  // Conditional formatting for the result column (col 5)
+  const resultRange = sheet.getRange('E2:E1000');
+  const rules = [
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('completed')
+      .setBackground('#bbf7d0').setFontColor('#14532d')
+      .setRanges([resultRange]).build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('failed')
+      .setBackground('#fecaca').setFontColor('#7f1d1d')
+      .setRanges([resultRange]).build(),
+  ];
+  sheet.setConditionalFormatRules(rules);
 }
 
-function setQueuePaused(queueName, paused) {
-  const props = PropertiesService.getScriptProperties();
-  const pausedQueues = props.getProperty('pausedQueues') || '[]';
-  let queues = JSON.parse(pausedQueues);
-
-  if (paused && !queues.includes(queueName)) {
-    queues.push(queueName);
-  } else if (!paused) {
-    queues = queues.filter((q) => q !== queueName);
+function getAllGraveyardJobs(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  
+  const jobs = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0]) continue;
+    
+    jobs.push({
+      id: row[0],
+      queueName: row[1],
+      processor: row[2],
+      data: parseJobData(row[3]),
+      state: row[4],
+      priority: row[5],
+      attempts: row[6],
+      maxAttempts: row[7],
+      timestamp: row[8],
+      processedOn: row[9] || null,
+      finishedOn: row[10] || null,
+      failedReason: row[11] || null,
+      returnvalue: row[12] || null,
+      repeatJobKey: row[13] || null,
+    });
   }
-
-  props.setProperty('pausedQueues', JSON.stringify(queues));
+  
+  return jobs;
 }
 
-// ============================================================================
-// UTILITIES
-// ============================================================================
-
-function generateUUID() {
-  return Utilities.getUuid();
-}
-
-// ============================================================================
-// CRON JOB HELPERS
-// ============================================================================
-
-function ensureCronHeaders(sheet) {
-  if (sheet.getLastRow() === 0) {
-    const headers = [
-      'id',
-      'name',
-      'queue',
-      'cronExpression',
-      'payload',
-      'enabled',
-      'lastRun',
-      'nextRun',
-    ];
-    sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
-  }
-}
-
-function appendCronJob(sheet, cronJob) {
-  sheet.appendRow([
-    cronJob.id,
-    cronJob.name,
-    cronJob.queue,
-    cronJob.cronExpression,
-    cronJob.payload,
-    cronJob.enabled,
-    cronJob.lastRun,
-    cronJob.nextRun,
-  ]);
-}
-
-function findCronJobById(sheet, id) {
+function findGraveyardJobById(sheet, id) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] === id) {
       return {
         id: data[i][0],
-        name: data[i][1],
-        queue: data[i][2],
-        cronExpression: data[i][3],
-        payload: data[i][4],
-        enabled: data[i][5],
-        lastRun: data[i][6] || null,
-        nextRun: data[i][7] || null,
+        queueName: data[i][1],
+        processor: data[i][2],
+        data: parseJobData(data[i][3]),
+        state: data[i][4],
+        priority: data[i][5],
+        attempts: data[i][6],
+        maxAttempts: data[i][7],
+        timestamp: data[i][8],
+        processedOn: data[i][9] || null,
+        finishedOn: data[i][10] || null,
+        failedReason: data[i][11] || null,
+        returnvalue: data[i][12] || null,
+        repeatJobKey: data[i][13] || null,
       };
     }
   }
   return null;
 }
 
-function deleteCronJobById(sheet, id) {
+function appendGraveyardJob(sheet, job) {
+  sheet.appendRow([
+    job.id, job.queueName, job.processor, serializeJobData(job.data), job.state, job.priority,
+    job.attempts, job.maxAttempts, job.timestamp, job.processedOn,
+    job.finishedOn, job.failedReason, job.returnvalue, job.repeatJobKey
+  ]);
+}
+
+function deleteGraveyardJobById(sheet, id) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] === id) {
@@ -1077,13 +1548,298 @@ function deleteCronJobById(sheet, id) {
   }
 }
 
-function toggleCronJobById(sheet, id, enabled) {
+// ============================================================================
+// SHEET HELPERS - SCHEDULES (was: Repeatable)
+// ============================================================================
+
+function ensureRepeatableHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = ['key', 'pipeline', 'action', 'data', 'pattern', 'enabled', 'lastRun', 'nextRun'];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#e37400')
+             .setFontColor('#ffffff');
+
+  sheet.setColumnWidth(1, 350);
+  sheet.setColumnWidth(2, 150);
+  sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 300);
+  sheet.setColumnWidth(5, 180);
+  sheet.setColumnWidth(6, 80);
+  sheet.setColumnWidth(7, 200);
+  sheet.setColumnWidth(8, 200);
+  sheet.setFrozenRows(1);
+  sheet.setTabColor('#e37400');
+
+  // Conditional formatting for enabled column (col 6)
+  const enabledRange = sheet.getRange('F2:F1000');
+  const rules = [
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('true')
+      .setBackground('#bbf7d0').setFontColor('#14532d')
+      .setRanges([enabledRange]).build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo('false')
+      .setBackground('#f3f4f6').setFontColor('#6b7280')
+      .setRanges([enabledRange]).build(),
+  ];
+  sheet.setConditionalFormatRules(rules);
+}
+
+function getAllRepeatableJobs(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  
+  const jobs = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0]) continue;
+    
+    let jobData;
+    try {
+      jobData = typeof row[3] === 'string' ? JSON.parse(row[3]) : row[3];
+    } catch (e) {
+      jobData = {};
+    }
+    
+    jobs.push({
+      key: row[0],
+      queueName: row[1],
+      processor: row[2],
+      data: jobData,
+      pattern: row[4],
+      enabled: row[5],
+      lastRun: row[6] || null,
+      nextRun: row[7] || null,
+    });
+  }
+  
+  return jobs;
+}
+
+function findRepeatableByKey(sheet, key) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === id) {
-      const rowNum = i + 1;
-      sheet.getRange(rowNum, 6).setValue(enabled);
+    if (data[i][0] === key) {
+      let jobData;
+      try {
+        jobData = typeof data[i][3] === 'string' ? JSON.parse(data[i][3]) : data[i][3];
+      } catch (e) {
+        jobData = {};
+      }
+      
+      return {
+        key: data[i][0],
+        queueName: data[i][1],
+        processor: data[i][2],
+        data: jobData,
+        pattern: data[i][4],
+        enabled: data[i][5],
+        lastRun: data[i][6] || null,
+        nextRun: data[i][7] || null,
+      };
+    }
+  }
+  return null;
+}
+
+function appendRepeatable(sheet, repeatable) {
+  sheet.appendRow([
+    repeatable.key, repeatable.queueName, repeatable.processor, repeatable.data,
+    repeatable.pattern, repeatable.enabled, repeatable.lastRun, repeatable.nextRun
+  ]);
+}
+
+function updateRepeatableEnabled(sheet, key, enabled) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === key) {
+      sheet.getRange(i + 1, 6).setValue(enabled);
       break;
     }
   }
+}
+
+function updateRepeatableNextRun(sheet, key, lastRun, nextRun) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === key) {
+      sheet.getRange(i + 1, 7).setValue(lastRun);
+      sheet.getRange(i + 1, 8).setValue(nextRun);
+      break;
+    }
+  }
+}
+
+function deleteRepeatableByKey(sheet, key) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === key) {
+      sheet.deleteRow(i + 1);
+      break;
+    }
+  }
+}
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+
+function getSheet(name) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+function getOrCreateSheet(name) {
+  let sheet = getSheet(name);
+  if (!sheet) {
+    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(name);
+  }
+  return sheet;
+}
+
+/**
+ * Run this once after pasting Code.gs into your Apps Script project.
+ * Creates all sheets with proper formatting and a Guide tab.
+ */
+function setupRogerSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  createGuideSheet(ss);
+
+  const pipelines = getOrCreateSheet(PIPELINES_SHEET);
+  ensureQueueHeaders(pipelines);
+
+  const actions = getOrCreateSheet(ACTIONS_SHEET);
+  ensureProcessorHeaders(actions);
+
+  const queue = getOrCreateSheet(QUEUE_SHEET);
+  ensureJobHeaders(queue);
+
+  const schedules = getOrCreateSheet(SCHEDULES_SHEET);
+  ensureRepeatableHeaders(schedules);
+
+  const history = getOrCreateSheet(HISTORY_SHEET);
+  ensureGraveyardHeaders(history);
+
+  SpreadsheetApp.getUi().alert(
+    '✅ Roger Sheet is ready!\n\n' +
+    'Open the dashboard at your Next.js app URL to start adding actions and jobs.\n\n' +
+    'Check the Guide tab for a quick walkthrough.'
+  );
+}
+
+function createGuideSheet(ss) {
+  const name = '📋 Guide';
+  if (ss.getSheetByName(name)) return;
+
+  const guide = ss.insertSheet(name, 0);
+  guide.setTabColor('#d93025');
+
+  const rows = [
+    ['ROGER SHEET — Automated Job Queue', '', ''],
+    ['', '', ''],
+    ['WHAT IS THIS?', '', ''],
+    ['Roger Sheet turns Google Sheets into a job queue. You define what to do (Actions),', '', ''],
+    ['add tasks (Queue), and a background trigger runs them automatically every minute.', '', ''],
+    ['', '', ''],
+    ['THE 5 SHEETS', '', ''],
+    ['Tab', 'What it stores', 'When to use it'],
+    ['📋 Guide', 'This help page', 'Read once'],
+    ['Pipelines', 'Named pipelines + pause switch', 'Create pipelines to group your jobs'],
+    ['Actions', 'Reusable handlers (HTTP or script)', 'Define what each job type does'],
+    ['Queue', 'Jobs waiting to run right now', 'See/manage live work'],
+    ['Schedules', 'Jobs that run on a recurring pattern', 'Set up cron-like repeating jobs'],
+    ['History', 'Everything that has run (done or failed)', 'Audit trail, debug failures'],
+    ['', '', ''],
+    ['HOW TO GET STARTED', '', ''],
+    ['1.', 'Go to Actions tab → create your first action (e.g. POST to a webhook URL)', ''],
+    ['2.', 'Go to Pipelines tab → create a pipeline (e.g. "notifications")', ''],
+    ['3.', 'Open your dashboard → Jobs → New Job → pick action + enter data', ''],
+    ['4.', 'The trigger runs every minute and executes waiting jobs automatically', ''],
+    ['5.', 'Check History tab to see results', ''],
+    ['', '', ''],
+    ['SCHEDULE PATTERNS', '', ''],
+    ['Pattern', 'Example', 'Meaning'],
+    ['every-N-minutes', 'every-5-minutes', 'Run every 5 minutes'],
+    ['every-N-hours', 'every-2-hours', 'Run every 2 hours'],
+    ['daily-HH:MM', 'daily-09:30', 'Run once a day at 09:30 UTC'],
+    ['', '', ''],
+    ['TIPS', '', ''],
+    ['Pausing', 'Set isPaused = TRUE in Pipelines tab to stop a whole pipeline', ''],
+    ['Priority', 'Higher number = runs first. Default is 0.', ''],
+    ['Retries', 'Failed jobs retry automatically up to maxAttempts times', ''],
+    ['History', 'Completed jobs move here automatically — Queue stays clean', ''],
+  ];
+
+  guide.getRange(1, 1, rows.length, 3).setValues(rows);
+
+  // Title formatting
+  guide.getRange('A1').setFontSize(16).setFontWeight('bold').setFontColor('#d93025');
+
+  // Section headers
+  ['A3', 'A7', 'A16', 'A23', 'A28'].forEach(function(cell) {
+    guide.getRange(cell).setFontWeight('bold').setFontColor('#1a73e8');
+  });
+
+  // Table header rows
+  [8, 24, 28].forEach(function(row) {
+    guide.getRange(row, 1, 1, 3)
+         .setFontWeight('bold')
+         .setBackground('#f1f3f4');
+  });
+
+  // Tab color cells in the table
+  const tabColors = { 'Pipelines': '#1a73e8', 'Actions': '#8430ce', 'Queue': '#1e8e3e', 'Schedules': '#e37400', 'History': '#5f6368' };
+  guide.getRange(9, 1, 6, 3).getValues().forEach(function(r, i) {
+    const color = tabColors[r[0]];
+    if (color) guide.getRange(9 + i, 1).setFontColor(color).setFontWeight('bold');
+  });
+
+  guide.setColumnWidth(1, 200);
+  guide.setColumnWidth(2, 400);
+  guide.setColumnWidth(3, 280);
+  guide.setFrozenRows(1);
+
+  // Move Guide to first position
+  ss.setActiveSheet(guide);
+  ss.moveActiveSheet(1);
+}
+
+function generateUUID() {
+  return Utilities.getUuid();
+}
+
+function calculateNextRun(pattern) {
+  const now = new Date();
+  const parts = pattern.split('-');
+  
+  if (parts[0] === 'every' && parts[2] === 'minutes') {
+    const minutes = parseInt(parts[1]);
+    return new Date(now.getTime() + minutes * 60 * 1000);
+  }
+  
+  if (parts[0] === 'every' && parts[2] === 'hours') {
+    const hours = parseInt(parts[1]);
+    return new Date(now.getTime() + hours * 60 * 60 * 1000);
+  }
+  
+  if (parts[0] === 'daily') {
+    const timeParts = parts[1].split(':');
+    const hour = parseInt(timeParts[0]);
+    const minute = parseInt(timeParts[1]);
+    
+    const next = new Date(now);
+    next.setUTCHours(hour, minute, 0, 0);
+    
+    if (next <= now) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+    
+    return next;
+  }
+  
+  return new Date(now.getTime() + 60 * 60 * 1000);
 }

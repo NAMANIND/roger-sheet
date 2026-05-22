@@ -1,14 +1,18 @@
 # Roger Sheet - Queue Processing System
 
+**Version 3.0 - Processor-Based Architecture**
+
 A BullMQ-inspired job queue system using Google Sheets as persistent storage and Google Apps Script as the worker runtime, with a Next.js management interface.
 
 ## Overview
 
-Roger Sheet is a lightweight, serverless queue processing system that leverages Google infrastructure:
+Roger Sheet is a lightweight, serverless queue processing system that leverages Google infrastructure with **reusable processors** for job execution:
 
 - **Google Sheets** acts as the persistent queue datastore (like Redis for BullMQ)
 - **Google Apps Script** serves as the worker, scheduler, and API backend
 - **Next.js** provides a modern web interface for queue management
+- **Processors** define reusable job execution logic (HTTP requests or custom scripts)
+- **Jobs** are lightweight references to processors with job-specific data
 
 Perfect for:
 - Small to medium workloads
@@ -16,24 +20,37 @@ Perfect for:
 - Projects that don't want to manage queue infrastructure
 - Webhook schedulers and delayed task execution
 - API orchestration and integration workflows
+- Reusable job templates with variable data
 
 ## Features
 
 ### Core Capabilities
 
+- ✅ **Reusable Processors** - Define execution logic once, use in many jobs
 - ✅ **Immediate Jobs** - Execute tasks immediately
 - ✅ **Delayed Jobs** - Schedule jobs to run after a delay
-- ✅ **Cron Jobs** - Recurring scheduled jobs
+- ✅ **Repeatable Jobs** - Recurring scheduled jobs (cron-like)
 - ✅ **Retry Logic** - Automatic retries with exponential backoff
-- ✅ **Dead Letter Queue** - Failed jobs after max retries
-- ✅ **Priority Queues** - Job prioritization (1-10)
+- ✅ **Job Graveyard** - Auto-archival of completed/failed jobs
+- ✅ **Priority Queues** - Job prioritization (higher = runs first)
 - ✅ **Worker Locking** - Concurrent execution protection
 - ✅ **Queue Pause/Resume** - Control job processing per queue
 - ✅ **Status Tracking** - Real-time job status monitoring
+- ✅ **Processor Testing** - Test processors independently before use
 
-### HTTP Request Execution
+### Processor Types
 
+**Script Processors**
+- Write custom JavaScript for complete job logic
+- Make multiple API calls in sequence
+- Perform data transformations and computations
+- Queue additional jobs dynamically
+- Access persistent storage
+- Built-in helper functions (fetch, log, addJob, etc.)
+
+**HTTP Processors**
 - Execute HTTP/webhook requests (GET, POST, PUT, DELETE, PATCH)
+- Template variables in URL, headers, and body
 - Custom headers and JSON body support
 - 30-second request timeout
 - Response status tracking
@@ -41,11 +58,20 @@ Perfect for:
 ### Management Interface
 
 - Real-time dashboard with queue statistics
+- Processor management (create, test, update, delete)
 - Job list with filtering and search
-- Create and schedule jobs via web UI
-- View job details, errors, and retry history
-- Queue management (pause/resume/clear)
-- Manual job retry
+- Create jobs by selecting processor and providing data
+- View job details, processor info, errors, and results
+- Queue management (pause/resume/clean)
+- Manual job retry (even from graveyard)
+- Graveyard view for completed/failed jobs
+
+## Documentation
+
+- **[PROCESSOR_ARCHITECTURE.md](PROCESSOR_ARCHITECTURE.md)** - Complete architecture guide for v3.0
+- **[MIGRATION_PROCESSOR.md](MIGRATION_PROCESSOR.md)** - Migration guide from v2.x to v3.0
+- **[QUICKSTART.md](QUICKSTART.md)** - Quick setup guide
+- **[BULLMQ_ARCHITECTURE.md](BULLMQ_ARCHITECTURE.md)** - BullMQ concepts (v2.x reference)
 
 ## Architecture
 
@@ -125,12 +151,18 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ### Creating a Job via UI
 
 1. Navigate to **Jobs** → **Create Job**
-2. Configure the job:
+2. Select execution mode:
+   - **Script Execution**: Write custom JavaScript code
+   - **HTTP Request**: Configure a single API call
+3. Configure the job:
    - Select queue name (default: "default")
    - Choose job type (immediate/delayed/cron)
-   - Enter HTTP request details (URL, method, headers, body)
+   - For script mode: Write JavaScript code with helper functions
+   - For HTTP mode: Enter HTTP request details (URL, method, headers, body)
    - Set priority (1-10) and max retries
-3. Click **Create Job**
+4. Click **Create Job**
+
+For script execution examples, see [SCRIPT_EXECUTION.md](SCRIPT_EXECUTION.md)
 
 ### Creating a Job via API
 

@@ -1,9 +1,31 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { JobStatus } from "@/types/job";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+export function extractTemplateVars(text: string): string[] {
+  const matches = text.match(/\{(\w+)\}/g);
+  if (!matches) return [];
+  return [...new Set(matches.map((m) => m.slice(1, -1)))];
+}
+
+export function buildHttpProcessorTestData(
+  config: { url?: string; headers?: Record<string, string>; body?: unknown }
+): Record<string, string> {
+  const chunks = [
+    config.url || '',
+    JSON.stringify(config.headers || {}),
+    typeof config.body === 'string' ? config.body : JSON.stringify(config.body || {}),
+  ];
+  const vars = new Set<string>();
+  chunks.forEach((chunk) => extractTemplateVars(chunk).forEach((v) => vars.add(v)));
+  const testData: Record<string, string> = {};
+  vars.forEach((v) => {
+    testData[v] = `sample-${v}`;
+  });
+  return testData;
 }
 
 export function formatDate(date: string | null): string {
@@ -15,30 +37,6 @@ export function formatDate(date: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-export function getStatusColor(status: JobStatus): string {
-  const colors: Record<JobStatus, string> = {
-    pending: 'bg-blue-500',
-    processing: 'bg-yellow-500',
-    completed: 'bg-green-500',
-    failed: 'bg-red-500',
-    delayed: 'bg-purple-500',
-    dead: 'bg-gray-500',
-  };
-  return colors[status] || 'bg-gray-500';
-}
-
-export function getStatusTextColor(status: JobStatus): string {
-  const colors: Record<JobStatus, string> = {
-    pending: 'text-blue-700',
-    processing: 'text-yellow-700',
-    completed: 'text-green-700',
-    failed: 'text-red-700',
-    delayed: 'text-purple-700',
-    dead: 'text-gray-700',
-  };
-  return colors[status] || 'text-gray-700';
 }
 
 export function formatDuration(ms: number): string {

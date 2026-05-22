@@ -1,84 +1,127 @@
-export type JobStatus = 
-  | 'pending' 
-  | 'processing' 
+export type JobState = 
+  | 'waiting'
+  | 'active' 
   | 'completed' 
   | 'failed' 
-  | 'delayed' 
-  | 'dead';
-
-export type JobType = 'immediate' | 'delayed' | 'cron';
+  | 'delayed';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
-export interface HttpPayload {
+export type ProcessorType = 'http' | 'script';
+
+export interface ProcessorParamSchema {
+  /** Declared parameter names (define before use in URL/body/script) */
+  params?: string[];
+  /** Default values used when testing this action */
+  paramDefaults?: Record<string, string>;
+}
+
+export interface HttpProcessorConfig extends ProcessorParamSchema {
   url: string;
   method: HttpMethod;
   headers?: Record<string, string>;
   body?: any;
+  urlTemplate?: boolean;
+}
+
+export interface ScriptProcessorConfig extends ProcessorParamSchema {
+  script: string;
+}
+
+export type ProcessorConfig = HttpProcessorConfig | ScriptProcessorConfig;
+
+export interface Processor {
+  name: string;
+  type: ProcessorType;
+  config: ProcessorConfig;
+  description?: string;
+  createdAt: string;
+}
+
+export interface CreateProcessorRequest {
+  name: string;
+  type: ProcessorType;
+  config: ProcessorConfig;
+  description?: string;
 }
 
 export interface Job {
   id: string;
-  queue: string;
-  type: JobType;
-  payload: HttpPayload;
-  status: JobStatus;
+  queueName: string;
+  processor: string;
+  data: Record<string, any>;
+  state: JobState;
   priority: number;
-  retryCount: number;
-  maxRetries: number;
-  runAt: string;
-  lockedBy: string | null;
-  lockedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  lastError: string | null;
-  completedAt: string | null;
+  attempts: number;
+  maxAttempts: number;
+  delay: number;
+  timestamp: string;
+  processedOn: string | null;
+  repeatJobKey: string | null;
+  // Graveyard fields (present when job is from graveyard)
+  finishedOn?: string | null;
+  failedReason?: string | null;
+  returnvalue?: any;
 }
 
-export interface CreateJobRequest {
-  queue: string;
-  type: JobType;
-  url: string;
-  method: HttpMethod;
-  headers?: Record<string, string>;
-  body?: any;
+export interface GraveyardJob extends Job {
+  finishedOn: string | null;
+  failedReason: string | null;
+  returnvalue: any;
+}
+
+export interface AddJobRequest {
+  queueName: string;
+  processor: string;
+  data: Record<string, any>;
+  opts?: {
+    priority?: number;
+    delay?: number;
+    attempts?: number;
+  };
+}
+
+export interface JobFormPrefill {
+  queueName: string;
+  processor: string;
+  data: Record<string, any>;
   priority?: number;
-  maxRetries?: number;
-  runAt?: Date | string;
-}
-
-export interface QueueStats {
-  name: string;
-  total: number;
-  pending: number;
-  processing: number;
-  completed: number;
-  failed: number;
-  dead: number;
-  isPaused: boolean;
+  attempts?: number;
 }
 
 export interface Queue {
   name: string;
   isPaused: boolean;
-  jobCounts: {
-    pending: number;
-    processing: number;
-    completed: number;
-    failed: number;
-    dead: number;
-  };
+  createdAt: string;
 }
 
-export interface CronJob {
-  id: string;
+export interface QueueStats {
   name: string;
-  queue: string;
-  cronExpression: string;
-  payload: HttpPayload;
+  total: number;
+  waiting: number;
+  active: number;
+  completed: number;
+  failed: number;
+  delayed: number;
+  isPaused: boolean;
+}
+
+export interface RepeatableJob {
+  key: string;
+  queueName: string;
+  processor: string;
+  data: Record<string, any>;
+  pattern: string;
   enabled: boolean;
   lastRun: string | null;
   nextRun: string | null;
+}
+
+export interface AddRepeatableJobRequest {
+  queueName: string;
+  processor: string;
+  data: Record<string, any>;
+  pattern: string;
 }
 
 export interface ApiResponse<T = any> {
@@ -89,16 +132,23 @@ export interface ApiResponse<T = any> {
 }
 
 export interface JobFilters {
-  status?: JobStatus;
-  queue?: string;
-  type?: JobType;
+  state?: JobState;
+  queueName?: string;
+  name?: string;
   search?: string;
-  startDate?: string;
-  endDate?: string;
+}
+
+export interface GraveyardFilters {
+  state?: 'completed' | 'failed';
+  queueName?: string;
 }
 
 export interface WorkerStats {
   lastRun: string | null;
   totalProcessed: number;
   isRunning: boolean;
+}
+
+export interface CreateQueueRequest {
+  name: string;
 }

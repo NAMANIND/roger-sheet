@@ -18,7 +18,7 @@ export function QueueStatsCards({ stats, isLoading }: QueueStatsCardsProps) {
               <CardTitle className="text-sm font-medium">Loading...</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-8 bg-gray-200 animate-pulse rounded"></div>
+              <div className="h-8 bg-muted animate-pulse rounded-md" />
             </CardContent>
           </Card>
         ))}
@@ -29,13 +29,13 @@ export function QueueStatsCards({ stats, isLoading }: QueueStatsCardsProps) {
   const totalStats = stats.reduce(
     (acc, queue) => ({
       total: acc.total + queue.total,
-      pending: acc.pending + queue.pending,
-      processing: acc.processing + queue.processing,
+      waiting: acc.waiting + queue.waiting,
+      active: acc.active + queue.active,
       completed: acc.completed + queue.completed,
       failed: acc.failed + queue.failed,
-      dead: acc.dead + queue.dead,
+      delayed: acc.delayed + queue.delayed,
     }),
-    { total: 0, pending: 0, processing: 0, completed: 0, failed: 0, dead: 0 }
+    { total: 0, waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
   );
 
   const cards = [
@@ -43,40 +43,42 @@ export function QueueStatsCards({ stats, isLoading }: QueueStatsCardsProps) {
       title: 'Total Jobs',
       value: totalStats.total,
       description: 'All jobs in the system',
-      color: 'text-gray-900',
+      color: 'text-foreground',
     },
     {
-      title: 'Pending',
-      value: totalStats.pending,
-      description: 'Waiting to be processed',
+      title: 'Waiting',
+      value: totalStats.waiting,
+      description: 'Ready to be processed',
       color: 'text-amber-600',
     },
     {
-      title: 'Processing',
-      value: totalStats.processing,
+      title: 'Active',
+      value: totalStats.active,
       description: 'Currently running',
-      color: 'text-green-600',
+      color: 'text-primary',
     },
     {
       title: 'Failed',
-      value: totalStats.failed + totalStats.dead,
+      value: totalStats.failed,
       description: 'Need attention',
-      color: 'text-red-600',
+      color: 'text-destructive',
     },
   ];
 
   return (
     <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.title} className="border-gray-200 shadow-sm">
+        <Card key={card.title}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-xs font-normal text-gray-500 uppercase tracking-wide">{card.title}</CardTitle>
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              {card.title}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-3xl font-light ${card.color}`}>
+            <div className={`text-3xl font-semibold tabular-nums ${card.color}`}>
               {card.value.toLocaleString()}
             </div>
-            <p className="text-xs text-gray-400 font-light mt-1">{card.description}</p>
+            <p className="text-xs text-muted-foreground mt-1">{card.description}</p>
           </CardContent>
         </Card>
       ))}
