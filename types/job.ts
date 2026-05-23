@@ -33,6 +33,7 @@ export interface ScriptProcessorConfig extends ProcessorParamSchema {
 export type ProcessorConfig = HttpProcessorConfig | ScriptProcessorConfig;
 
 export interface Processor {
+  id?: string;
   name: string;
   type: ProcessorType;
   config: ProcessorConfig;
@@ -93,6 +94,7 @@ export interface JobFormPrefill {
 }
 
 export interface Queue {
+  id?: string;
   name: string;
   isPaused: boolean;
   createdAt: string;
@@ -110,6 +112,7 @@ export interface QueueStats {
 }
 
 export interface RepeatableJob {
+  id?: string;
   key: string;
   queueName: string;
   processor: string;

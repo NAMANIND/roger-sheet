@@ -9,6 +9,12 @@ import {
   resolveJobOrganizationId,
   touchSyncOrganizations,
 } from '@/lib/services/sync-org-resolve';
+import {
+  normalizeExecutorProcessor,
+  normalizeExecutorQueue,
+  normalizeExecutorSchedule,
+  parseExecutorDate,
+} from '@/lib/services/executor-normalize';
 import { fail, ok } from '@/lib/services/errors';
 import type { ApiResponse, Job, Processor, Queue, RepeatableJob } from '@/types/job';
 
@@ -35,6 +41,52 @@ function executionModeForJob(
 ): ExecutionMode {
   if (j.executionMode === 'ping') return ExecutionMode.ping;
   return modeByAction.get(j.processor) ?? ExecutionMode.full;
+}
+
+async function clearConflictingExecutorRow(
+  organizationId: string,
+  entity: 'pipeline' | 'action' | 'schedule',
+  id: string,
+  name: string
+): Promise<void> {
+  if (entity === 'pipeline') {
+    const byName = await prisma.pipeline.findUnique({
+      where: { organizationId_name: { organizationId, name } },
+    });
+    if (byName && byName.id !== id) {
+      await prisma.pipeline.delete({ where: { id: byName.id } });
+    }
+    const byIdAsName = await prisma.pipeline.findUnique({
+      where: { organizationId_name: { organizationId, name: id } },
+    });
+    if (byIdAsName && byIdAsName.id !== id) {
+      await prisma.pipeline.delete({ where: { id: byIdAsName.id } });
+    }
+    return;
+  }
+
+  if (entity === 'action') {
+    const byName = await prisma.action.findUnique({
+      where: { organizationId_name: { organizationId, name } },
+    });
+    if (byName && byName.id !== id) {
+      await prisma.action.delete({ where: { id: byName.id } });
+    }
+    const byIdAsName = await prisma.action.findUnique({
+      where: { organizationId_name: { organizationId, name: id } },
+    });
+    if (byIdAsName && byIdAsName.id !== id) {
+      await prisma.action.delete({ where: { id: byIdAsName.id } });
+    }
+    return;
+  }
+
+  const byKey = await prisma.schedule.findUnique({
+    where: { organizationId_key: { organizationId, key: name } },
+  });
+  if (byKey && byKey.id !== id) {
+    await prisma.schedule.delete({ where: { id: byKey.id } });
+  }
 }
 
 /** Pull executor (Sheets) → Postgres. History/jobs attach to the org that created them. */
@@ -76,40 +128,43 @@ export async function syncPullFromExecutor(): Promise<
       ]);
 
     if (queuesRes.success && queuesRes.data) {
-      for (const q of queuesRes.data) {
+      for (const raw of queuesRes.data) {
+        const q = normalizeExecutorQueue(raw);
+        await clearConflictingExecutorRow(systemOrg.id, 'pipeline', q.id, q.name);
         await prisma.pipeline.upsert({
-          where: {
-            organizationId_name: { organizationId: systemOrg.id, name: q.name },
-          },
+          where: { id: q.id },
           create: {
+            id: q.id,
             organizationId: systemOrg.id,
             name: q.name,
             isPaused: q.isPaused,
             metadata: { syncedAt: new Date().toISOString() },
-            createdAt: new Date(q.createdAt),
+            createdAt: parseExecutorDate(q.createdAt),
           },
-          update: { isPaused: q.isPaused },
+          update: { isPaused: q.isPaused, name: q.name },
         });
         stats.pipelines++;
       }
     }
 
     if (processorsRes.success && processorsRes.data) {
-      for (const p of processorsRes.data) {
+      for (const raw of processorsRes.data) {
+        const p = normalizeExecutorProcessor(raw);
+        await clearConflictingExecutorRow(systemOrg.id, 'action', p.id, p.name);
         await prisma.action.upsert({
-          where: {
-            organizationId_name: { organizationId: systemOrg.id, name: p.name },
-          },
+          where: { id: p.id },
           create: {
+            id: p.id,
             organizationId: systemOrg.id,
             name: p.name,
             type: p.type as ActionType,
             config: p.config as object,
             description: p.description,
             metadata: {},
-            createdAt: new Date(p.createdAt),
+            createdAt: parseExecutorDate(p.createdAt),
           },
           update: {
+            name: p.name,
             type: p.type as ActionType,
             config: p.config as object,
             description: p.description,
@@ -141,7 +196,7 @@ export async function syncPullFromExecutor(): Promise<
             repeatKey: j.repeatJobKey,
             executionMode,
             processedAt: j.processedOn ? new Date(j.processedOn) : null,
-            createdAt: new Date(j.timestamp),
+            createdAt: parseExecutorDate(j.timestamp),
             executorSyncedAt: new Date(),
             metadata: {},
           },
@@ -163,8 +218,8 @@ export async function syncPullFromExecutor(): Promise<
         const organizationId = await resolveJobOrganizationId(j.id);
         const data = parseJobData(j.data) as Prisma.InputJsonValue;
         const finishedAt = j.finishedOn
-          ? new Date(j.finishedOn)
-          : new Date(j.timestamp);
+          ? parseExecutorDate(j.finishedOn)
+          : parseExecutorDate(j.timestamp);
         const executionMode = executionModeForJob(j, modeByAction);
 
         const existing = await prisma.jobHistory.findUnique({
@@ -190,7 +245,7 @@ export async function syncPullFromExecutor(): Promise<
             finishedAt,
             failedReason: j.failedReason ?? null,
             returnValue: j.returnvalue ?? undefined,
-            createdAt: new Date(j.timestamp),
+            createdAt: parseExecutorDate(j.timestamp),
             metadata: {},
           },
           update: {
@@ -218,12 +273,13 @@ export async function syncPullFromExecutor(): Promise<
     }
 
     if (schedulesRes.success && schedulesRes.data) {
-      for (const s of schedulesRes.data) {
+      for (const raw of schedulesRes.data) {
+        const s = normalizeExecutorSchedule(raw);
+        await clearConflictingExecutorRow(systemOrg.id, 'schedule', s.id, s.key);
         await prisma.schedule.upsert({
-          where: {
-            organizationId_key: { organizationId: systemOrg.id, key: s.key },
-          },
+          where: { id: s.id },
           create: {
+            id: s.id,
             organizationId: systemOrg.id,
             key: s.key,
             pipelineName: s.queueName,
@@ -231,16 +287,19 @@ export async function syncPullFromExecutor(): Promise<
             data: parseJobData(s.data) as Prisma.InputJsonValue,
             pattern: s.pattern,
             enabled: s.enabled,
-            lastRunAt: s.lastRun ? new Date(s.lastRun) : null,
-            nextRunAt: s.nextRun ? new Date(s.nextRun) : null,
+            lastRunAt: s.lastRun ? parseExecutorDate(s.lastRun) : null,
+            nextRunAt: s.nextRun ? parseExecutorDate(s.nextRun) : null,
             metadata: {},
           },
           update: {
+            key: s.key,
+            pipelineName: s.queueName,
+            actionName: s.processor,
             data: parseJobData(s.data) as Prisma.InputJsonValue,
             pattern: s.pattern,
             enabled: s.enabled,
-            lastRunAt: s.lastRun ? new Date(s.lastRun) : null,
-            nextRunAt: s.nextRun ? new Date(s.nextRun) : null,
+            lastRunAt: s.lastRun ? parseExecutorDate(s.lastRun) : null,
+            nextRunAt: s.nextRun ? parseExecutorDate(s.nextRun) : null,
           },
         });
         stats.schedules++;
