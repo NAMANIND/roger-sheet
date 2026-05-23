@@ -1,11 +1,10 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getJobs, getGraveyardJobs } from '@/app/actions/jobs';
 import { getProcessors } from '@/app/actions/processors';
 import { getRepeatableJobs } from '@/app/actions/repeatable';
 import { getQueueStats } from '@/app/actions/queues';
-import { pullFromExecutor } from '@/app/actions/sync';
 import { getAccountUsage } from '@/app/actions/account';
 import { queryKeys, REFETCH } from '@/lib/queries/keys';
 import type { GraveyardFilters, JobFilters } from '@/types/job';
@@ -15,25 +14,7 @@ function unwrap<T>(result: { success: boolean; data?: T; error?: string }): T {
   return result.data as T;
 }
 
-export function useExecutorPull(enabled = true) {
-  const queryClient = useQueryClient();
-  return useQuery({
-    queryKey: queryKeys.executorPull(),
-    queryFn: async () => {
-      const result = unwrap(await pullFromExecutor());
-      await queryClient.invalidateQueries({ queryKey: queryKeys.history() });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.usage() });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.queueStats() });
-      return result;
-    },
-    enabled,
-    refetchInterval: REFETCH.executorPull,
-    refetchIntervalInBackground: true,
-  });
-}
-
-export function useJobs(filters?: JobFilters, pullExecutor = false) {
-  useExecutorPull(pullExecutor);
+export function useJobs(filters?: JobFilters) {
   return useQuery({
     queryKey: queryKeys.jobs(filters),
     queryFn: async () => unwrap(await getJobs(filters)),
@@ -42,7 +23,6 @@ export function useJobs(filters?: JobFilters, pullExecutor = false) {
 }
 
 export function useHistory(filters?: GraveyardFilters) {
-  useExecutorPull(true);
   return useQuery({
     queryKey: queryKeys.history(filters),
     queryFn: async () => unwrap(await getGraveyardJobs(filters)),
@@ -75,7 +55,6 @@ export function useQueueStats() {
 }
 
 export function useAccountUsage(enabled = true) {
-  useExecutorPull(enabled);
   return useQuery({
     queryKey: queryKeys.usage(),
     queryFn: async () => unwrap(await getAccountUsage()),
@@ -85,7 +64,6 @@ export function useAccountUsage(enabled = true) {
 }
 
 export function useDashboardData() {
-  useExecutorPull(true);
   const stats = useQueueStats();
   const jobs = useJobs({});
   const history = useHistory({});

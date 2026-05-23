@@ -25,6 +25,8 @@ export type PullSyncStats = {
   jobs: number;
   history: number;
   schedules: number;
+  /** Active Postgres jobs removed because they no longer exist on the executor */
+  reconciled: number;
 };
 
 async function buildActionModeByName(): Promise<Map<string, ExecutionMode>> {
@@ -114,6 +116,7 @@ export async function syncPullFromExecutor(): Promise<
     jobs: 0,
     history: 0,
     schedules: 0,
+    reconciled: 0,
   };
 
   try {
@@ -371,6 +374,20 @@ export async function syncPullFromExecutor(): Promise<
         });
         stats.schedules++;
       }
+    }
+
+    if (jobsRes.success && graveyardRes.success) {
+      const executorJobIds = new Set<string>();
+      for (const j of jobsRes.data ?? []) executorJobIds.add(j.id);
+      for (const j of graveyardRes.data ?? []) executorJobIds.add(j.id);
+
+      const reconciled = await prisma.job.deleteMany({
+        where: {
+          executorSyncedAt: { not: null },
+          id: { notIn: [...executorJobIds] },
+        },
+      });
+      stats.reconciled = reconciled.count;
     }
 
     const orgIds = await touchSyncOrganizations();

@@ -461,4 +461,6 @@ curl -X POST http://localhost:3000/api/internal/sync \
 
 Push drains the outbox to Sheets; pull imports completed jobs and state. `http_ping` jobs run on the Apps Script minute trigger — you do not need `"pings": true` here unless you want the legacy Postgres-side dispatch fallback.
 
+The UI reads Postgres only — it does **not** call sync. Run this worker (or `npm run db:sync`) on a schedule; the UI refreshes its view on the next poll after Postgres is updated.
+
 Or locally: npm run db:sync

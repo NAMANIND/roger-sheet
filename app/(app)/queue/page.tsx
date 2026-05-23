@@ -15,7 +15,7 @@ export default function QueuePage() {
     isLoading: jobsLoading,
     isFetching: jobsFetching,
     refetch: refetchJobs,
-  } = useJobs(filters, true);
+  } = useJobs(filters);
   const {
     data: repeatableJobs = [],
     isLoading: schedulesLoading,
@@ -35,7 +35,7 @@ export default function QueuePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Queue</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Active jobs — auto-refreshes every few seconds
+            Active jobs from Postgres — run sync worker to refresh from Sheets
           </p>
         </div>
         <div className="flex items-center gap-2">

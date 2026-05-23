@@ -15,7 +15,7 @@ export default function HistoryPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">History</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Completed and failed jobs. Syncs from the executor automatically.
+            Completed and failed jobs from Postgres — run sync worker to refresh from Sheets
           </p>
         </div>
         {isFetching && !isLoading && (
