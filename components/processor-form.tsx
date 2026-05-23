@@ -148,7 +148,7 @@ function getInitialFormState(processor?: Processor) {
   return {
     name: processor.name,
     description,
-    processorType: 'http' as ProcessorType,
+    processorType: (processor.type === 'http_ping' ? 'http_ping' : 'http') as ProcessorType,
     script: DEFAULT_SCRIPT,
     url: http.url || '',
     method: http.method || 'POST',
@@ -215,7 +215,7 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
   }, [headerMode, headersText, headerPairs]);
 
   const httpUsedRefs = useMemo(() => {
-    if (processorType !== 'http') return [];
+    if (processorType !== 'http' && processorType !== 'http_ping') return [];
     return collectHttpConfigRefs({
       url,
       headers: headerMode === 'simple' ? (pairsToObject(headerPairs) as Record<string, string>) : undefined,
@@ -280,11 +280,13 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
     }
 
     const used =
-      processorType === 'http' ? httpUsedRefs : scriptUsedRefs;
+      processorType === 'http' || processorType === 'http_ping'
+        ? httpUsedRefs
+        : scriptUsedRefs;
     const { unknown } = validateParamUsage(definedParams, used);
     if (unknown.length > 0) {
       const hint =
-        processorType === 'http'
+        processorType === 'http' || processorType === 'http_ping'
           ? unknown.map((p) => `{${p}}`).join(', ')
           : unknown.map((p) => `data.${p}`).join(', ');
       return `Unknown parameters in config: ${hint}. Add them in Parameters first.`;
@@ -496,9 +498,9 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
           />
 
           <Tabs
-            value={processorType}
+            value={processorType === 'script' ? 'script' : 'http'}
             onValueChange={(v) => {
-              if (!isEdit) setProcessorType(v as ProcessorType);
+              if (!isEdit) setProcessorType(v === 'script' ? 'script' : 'http');
             }}
           >
             {!isEdit && (
@@ -543,6 +545,38 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
             </TabsContent>
 
             <TabsContent value="http" className="space-y-4">
+              {!isEdit && (
+                <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+                  <p className="text-sm font-medium">Execution mode</p>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        name="httpMode"
+                        checked={processorType === 'http'}
+                        onChange={() => setProcessorType('http')}
+                        className="h-4 w-4"
+                      />
+                      Full — logs and response in History
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        name="httpMode"
+                        checked={processorType === 'http_ping'}
+                        onChange={() => setProcessorType('http_ping')}
+                        className="h-4 w-4"
+                      />
+                      Ping — fire webhook, no wait for response
+                    </label>
+                  </div>
+                </div>
+              )}
+              {isEdit && processorType === 'http_ping' && (
+                <p className="text-sm text-muted-foreground">
+                  Ping action — webhook is fired from the platform without waiting for a response.
+                </p>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="url">URL</Label>
                 <Input

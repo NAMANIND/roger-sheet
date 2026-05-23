@@ -20,6 +20,11 @@ import { addJob } from '@/app/actions/jobs';
 import { addRepeatableJob } from '@/app/actions/repeatable';
 import { getProcessors } from '@/app/actions/processors';
 import { pairsFromDefinitions } from '@/lib/params';
+import {
+  IMMEDIATE_EXECUTION_LABEL,
+  REPEATABLE_PATTERN_OPTIONS,
+  validateRepeatablePattern,
+} from '@/lib/schedule-patterns';
 import { X } from 'lucide-react';
 
 type ExecutionType = 'immediate' | 'schedule';
@@ -185,6 +190,11 @@ export function JobForm({
 
       // Handle repeatable jobs
       if (executionType === 'schedule' && scheduleType === 'repeatable') {
+        const patternError = validateRepeatablePattern(cronPattern);
+        if (patternError) {
+          throw new Error(patternError);
+        }
+
         const result = await addRepeatableJob({
           queueName: queue,
           processor: selectedProcessor,
@@ -402,7 +412,7 @@ export function JobForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="immediate">Immediate</SelectItem>
+                <SelectItem value="immediate">{IMMEDIATE_EXECUTION_LABEL}</SelectItem>
                 <SelectItem value="schedule">Schedule</SelectItem>
               </SelectContent>
             </Select>
@@ -450,47 +460,22 @@ export function JobForm({
 
               {scheduleType === 'repeatable' && (
                 <div className="space-y-2">
-                  <Label htmlFor="cronPattern">Pattern</Label>
-                  <Input
-                    id="cronPattern"
-                    value={cronPattern}
-                    onChange={(e) => setCronPattern(e.target.value)}
-                    placeholder="every-5-minutes"
-                    className="font-mono"
-                  />
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <p>Examples:</p>
-                    <div className="grid grid-cols-2 gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setCronPattern('every-5-minutes')}
-                        className="text-left hover:text-foreground font-mono"
-                      >
-                        every-5-minutes
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCronPattern('every-1-hours')}
-                        className="text-left hover:text-foreground font-mono"
-                      >
-                        every-1-hours
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCronPattern('daily-09:00')}
-                        className="text-left hover:text-foreground font-mono"
-                      >
-                        daily-09:00
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCronPattern('daily-18:00')}
-                        className="text-left hover:text-foreground font-mono"
-                      >
-                        daily-18:00
-                      </button>
-                    </div>
-                  </div>
+                  <Label htmlFor="cronPattern">Repeat every</Label>
+                  <Select value={cronPattern} onValueChange={(v) => v && setCronPattern(v)}>
+                    <SelectTrigger id="cronPattern">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REPEATABLE_PATTERN_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Minimum interval is 5 minutes. Immediate jobs run in about 1-2 minutes.
+                  </p>
                 </div>
               )}
             </>

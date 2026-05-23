@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getQueueStats } from '@/app/actions/queues';
-import { getJobs } from '@/app/actions/jobs';
+import { getJobs, getGraveyardJobs } from '@/app/actions/jobs';
 import { getRepeatableJobs } from '@/app/actions/repeatable';
 import { QueueStatsCards } from '@/components/queue-stats';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,15 +22,24 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    const [statsResult, jobsResult, repeatableResult] = await Promise.all([
+    const [statsResult, jobsResult, historyResult, repeatableResult] = await Promise.all([
       getQueueStats(),
       getJobs({}),
+      getGraveyardJobs({}),
       getRepeatableJobs(),
     ]);
 
     if (statsResult.success && statsResult.data) setStats(statsResult.data);
-    if (jobsResult.success && jobsResult.data) {
-      setRecentJobs(jobsResult.data.slice(0, 8));
+    if (jobsResult.success || historyResult.success) {
+      const active = jobsResult.success && jobsResult.data ? jobsResult.data : [];
+      const history =
+        historyResult.success && historyResult.data ? historyResult.data : [];
+      const merged = [...active, ...history].sort((a, b) => {
+        const aTime = new Date(a.finishedOn ?? a.timestamp).getTime();
+        const bTime = new Date(b.finishedOn ?? b.timestamp).getTime();
+        return bTime - aTime;
+      });
+      setRecentJobs(merged.slice(0, 8));
     }
     if (repeatableResult.success && repeatableResult.data) {
       setRepeatableJobs(repeatableResult.data);
@@ -39,11 +48,13 @@ export default function DashboardPage() {
     if (
       !statsResult.success &&
       !jobsResult.success &&
+      !historyResult.success &&
       !repeatableResult.success
     ) {
       setError(
         statsResult.error ??
           jobsResult.error ??
+          historyResult.error ??
           repeatableResult.error ??
           'Failed to load dashboard'
       );

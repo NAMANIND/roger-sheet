@@ -7,7 +7,9 @@ export type JobState =
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
-export type ProcessorType = 'http' | 'script';
+export type ProcessorType = 'http' | 'http_ping' | 'script';
+
+export type ExecutionMode = 'ping' | 'full';
 
 export interface ProcessorParamSchema {
   /** Declared parameter names (define before use in URL/body/script) */
@@ -58,6 +60,7 @@ export interface Job {
   timestamp: string;
   processedOn: string | null;
   repeatJobKey: string | null;
+  executionMode?: ExecutionMode;
   // Graveyard fields (present when job is from graveyard)
   finishedOn?: string | null;
   failedReason?: string | null;
@@ -134,6 +137,7 @@ export interface ApiResponse<T = any> {
 export interface JobFilters {
   state?: JobState;
   queueName?: string;
+  processor?: string;
   name?: string;
   search?: string;
 }
@@ -143,10 +147,27 @@ export interface GraveyardFilters {
   queueName?: string;
 }
 
+export interface UsageDayStats {
+  date: string;
+  minuteTriggers: number;
+  pingRuns: number;
+  pingOk: number;
+  pingFailed: number;
+  fullCompleted: number;
+  fullFailed: number;
+  scheduleJobs: number;
+  minuteRuntimeMs: number;
+  pingRuntimeMs: number;
+  apiCalls: number;
+  totalExecutions: number;
+  lastUpdated: string | null;
+}
+
 export interface WorkerStats {
   lastRun: string | null;
   totalProcessed: number;
   isRunning: boolean;
+  usageToday?: UsageDayStats | null;
 }
 
 export interface CreateQueueRequest {

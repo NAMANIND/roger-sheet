@@ -15,6 +15,10 @@ import {
 } from 'lucide-react';
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/lib/brand';
 import { cn } from '@/lib/utils';
+import { SidebarUser } from '@/components/sidebar-user';
+import type { SessionUser } from '@/lib/auth/session';
+import type { UsageSnapshot } from '@/lib/services/usage';
+import { formatRemaining } from '@/lib/services/usage';
 
 type NavItem = {
   label: string;
@@ -31,7 +35,7 @@ type NavSection = {
 const navSections: NavSection[] = [
   {
     items: [
-      { label: 'Dashboard', href: '/', icon: LayoutDashboard, exact: true },
+      { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, exact: true },
       { label: 'Queue', href: '/queue', icon: ListTodo },
       { label: 'Schedules', href: '/schedules', icon: CalendarClock },
     ],
@@ -45,19 +49,29 @@ const navSections: NavSection[] = [
   },
   {
     heading: 'Logs',
-    items: [
-      { label: 'History', href: '/history', icon: Archive },
-    ],
+    items: [{ label: 'History', href: '/history', icon: Archive }],
   },
 ];
 
-export function Sidebar() {
+type SidebarProps = {
+  user: SessionUser | null;
+  workspaceName?: string;
+  planName?: string;
+  usage?: UsageSnapshot | null;
+};
+
+export function Sidebar({ user, workspaceName, planName, usage }: SidebarProps) {
   const pathname = usePathname();
 
   const isActive = (href: string, exact = false) => {
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(href + '/');
   };
+
+  const usageLine =
+    usage != null
+      ? `Ping: ${formatRemaining(usage.pingCount, usage.pingLimit)} · Full: ${formatRemaining(usage.fullCount, usage.fullLimit)}`
+      : null;
 
   return (
     <aside className="flex flex-col w-60 shrink-0 h-full bg-sidebar border-r border-sidebar-border">
@@ -126,28 +140,31 @@ export function Sidebar() {
         </Link>
         <Link
           href="/settings"
-          className="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-sidebar-foreground/50 cursor-not-allowed pointer-events-none"
-          aria-disabled
+          className={cn(
+            'flex items-center gap-3 px-2 py-1.5 rounded-md text-sm transition-colors',
+            isActive('/settings', true)
+              ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+              : 'text-sidebar-foreground hover:text-sidebar-accent-foreground hover:bg-sidebar-accent/60'
+          )}
         >
           <Settings size={15} strokeWidth={1.5} />
           Settings
         </Link>
 
-        <div className="mt-3 pt-3 border-t border-sidebar-border">
-          <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-sidebar-accent/60 transition-colors cursor-pointer">
-            <div className="w-6 h-6 rounded-full bg-sidebar-accent flex items-center justify-center shrink-0 ring-1 ring-sidebar-border">
-              <span className="text-sidebar-foreground text-[10px] font-medium">W</span>
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs text-sidebar-accent-foreground font-medium truncate leading-tight">
-                Workspace
-              </p>
-              <p className="text-[10px] text-sidebar-foreground truncate leading-tight">
-                Free plan
-              </p>
-            </div>
-          </div>
-        </div>
+        {usageLine && (
+          <p className="px-2 pt-2 text-[10px] text-sidebar-foreground/80 leading-tight">
+            {usageLine}
+          </p>
+        )}
+
+        {user && workspaceName && planName && (
+          <SidebarUser
+            name={user.name}
+            email={user.email}
+            workspaceName={workspaceName}
+            planName={planName}
+          />
+        )}
       </div>
     </aside>
   );

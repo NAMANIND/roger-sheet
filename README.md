@@ -15,6 +15,7 @@ Roger Sheet is a lightweight, serverless queue processing system that leverages 
 - **Jobs** are lightweight references to processors with job-specific data
 
 Perfect for:
+
 - Small to medium workloads
 - Serverless architectures
 - Projects that don't want to manage queue infrastructure
@@ -41,6 +42,7 @@ Perfect for:
 ### Processor Types
 
 **Script Processors**
+
 - Write custom JavaScript for complete job logic
 - Make multiple API calls in sequence
 - Perform data transformations and computations
@@ -49,6 +51,7 @@ Perfect for:
 - Built-in helper functions (fetch, log, addJob, etc.)
 
 **HTTP Processors**
+
 - Execute HTTP/webhook requests (GET, POST, PUT, DELETE, PATCH)
 - Template variables in URL, headers, and body
 - Custom headers and JSON body support
@@ -204,6 +207,7 @@ curl -X POST "YOUR_APPS_SCRIPT_URL" \
    - **nextRun**: Leave empty (auto-calculated)
 
 Example:
+
 ```
 | id | name | queue | cronExpression | payload | enabled | lastRun | nextRun |
 |----|------|-------|----------------|---------|---------|---------|---------|
@@ -214,23 +218,23 @@ Example:
 
 The Google Sheet `Queue` tab contains these columns:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | UUID | Unique job identifier |
-| queue | string | Queue name (e.g., "default", "emails") |
-| type | string | "immediate", "delayed", or "cron" |
-| payload | JSON | HTTP request configuration |
-| status | string | "pending", "processing", "completed", "failed", "dead" |
-| priority | number | 1-10, higher = more important |
-| retryCount | number | Current retry attempt |
-| maxRetries | number | Maximum retry attempts |
-| runAt | ISO date | When to execute the job |
-| lockedBy | UUID | Worker execution ID (if locked) |
-| lockedAt | ISO date | When the job was locked |
-| createdAt | ISO date | Job creation time |
-| updatedAt | ISO date | Last update time |
-| lastError | string | Error message if failed |
-| completedAt | ISO date | Completion time |
+| Column      | Type     | Description                                            |
+| ----------- | -------- | ------------------------------------------------------ |
+| id          | UUID     | Unique job identifier                                  |
+| queue       | string   | Queue name (e.g., "default", "emails")                 |
+| type        | string   | "immediate", "delayed", or "cron"                      |
+| payload     | JSON     | HTTP request configuration                             |
+| status      | string   | "pending", "processing", "completed", "failed", "dead" |
+| priority    | number   | 1-10, higher = more important                          |
+| retryCount  | number   | Current retry attempt                                  |
+| maxRetries  | number   | Maximum retry attempts                                 |
+| runAt       | ISO date | When to execute the job                                |
+| lockedBy    | UUID     | Worker execution ID (if locked)                        |
+| lockedAt    | ISO date | When the job was locked                                |
+| createdAt   | ISO date | Job creation time                                      |
+| updatedAt   | ISO date | Last update time                                       |
+| lastError   | string   | Error message if failed                                |
+| completedAt | ISO date | Completion time                                        |
 
 ## Job Lifecycle
 
@@ -408,3 +412,50 @@ For issues and questions:
 ---
 
 **Roger Sheet** - Simple, serverless job queues powered by Google Sheets
+
+flowchart LR
+UI[Next.js UI] --> DB[(Supabase / Postgres)]
+UI --> AS[Apps Script Web App]
+AS --> Sheets[Google Sheets]
+
+flowchart TB
+subgraph surface [Surface - fast]
+UI[Next.js UI]
+DB[(Postgres)]
+UI --> DB
+end
+
+subgraph your_infra [Your infrastructure]
+CRON[Cron / worker / queue]
+end
+
+subgraph apis [Dispatch internal APIs]
+SYNC["POST /api/internal/sync"]
+EXEC["POST /api/internal/executor"]
+end
+
+subgraph execution [Execution plane]
+AS[Apps Script]
+SH[Google Sheets]
+AS --> SH
+end
+
+UI -->|"write only DB + outbox"| DB
+CRON -->|"Bearer INTERNAL_API_SECRET"| SYNC
+SYNC -->|push outbox| EXEC
+SYNC -->|pull completed/state| AS
+EXEC --> AS
+
+Migrate (adds SyncOutbox):
+
+npm run db:migrate
+.env — add:
+
+SYNC_MODE=async
+Worker — every 30–60s from your infra:
+
+curl -X POST http://localhost:3000/api/internal/sync \
+ -H "Authorization: Bearer YOUR_INTERNAL_API_SECRET" \
+ -H "Content-Type: application/json" \
+ -d '{"push": true, "pull": true}'
+Or locally: npm run db:sync

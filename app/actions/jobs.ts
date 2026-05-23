@@ -7,65 +7,53 @@ import {
   JobFilters,
   GraveyardFilters,
 } from '@/types/job';
-import { callAppsScript } from '@/lib/apps-script';
+import * as jobService from '@/lib/services/jobs';
 
 export async function addJob(jobData: AddJobRequest): Promise<ApiResponse<Job>> {
-  return callAppsScript<Job>('addJob', jobData);
+  return jobService.addJob(jobData);
 }
 
 export async function getJobs(filters?: JobFilters): Promise<ApiResponse<Job[]>> {
-  return callAppsScript<Job[]>('getJobs', filters);
+  return jobService.listJobs(filters);
 }
 
 export async function getJob(
   id: string
 ): Promise<ApiResponse<Job> & { fromGraveyard?: boolean }> {
-  return callAppsScript<Job>('getJob', { id });
+  return jobService.getJob(id);
 }
 
 export async function retryJob(id: string): Promise<ApiResponse<Job>> {
-  return callAppsScript<Job>('retryJob', { id });
+  return jobService.retryJob(id);
 }
 
 export async function removeJob(id: string): Promise<ApiResponse<void>> {
-  return callAppsScript<void>('removeJob', { id });
+  return jobService.removeJob(id);
 }
 
 export async function cleanJobs(
   state: 'completed' | 'failed',
   queueName?: string
 ): Promise<ApiResponse<{ removed: number }>> {
-  return callAppsScript('cleanJobs', { state, queueName });
+  return jobService.cleanJobs(state, queueName);
 }
 
 export async function getGraveyardJobs(
   filters?: GraveyardFilters
 ): Promise<ApiResponse<Job[]>> {
-  return callAppsScript<Job[]>('getGraveyardJobs', filters);
+  return jobService.listHistoryJobs(filters);
 }
 
 export async function cleanGraveyard(
   olderThanMs?: number
 ): Promise<ApiResponse<{ count: number }>> {
-  return callAppsScript<{ count: number }>(
-    'cleanGraveyard',
-    olderThanMs != null ? { olderThan: olderThanMs } : {}
-  );
+  return jobService.cleanHistory(olderThanMs);
 }
 
 export async function requeueGraveyardJob(id: string): Promise<ApiResponse<Job>> {
-  return callAppsScript<Job>('retryJob', { id });
+  return jobService.retryJob(id);
 }
 
-/** Run the job's action with this job's payload (dry run). */
 export async function testJob(id: string): Promise<ApiResponse<unknown>> {
-  const jobResult = await getJob(id);
-  if (!jobResult.success || !jobResult.data) {
-    return { success: false, error: jobResult.error ?? 'Job not found' };
-  }
-  const job = jobResult.data;
-  return callAppsScript('testProcessor', {
-    name: job.processor,
-    testData: job.data,
-  });
+  return jobService.testJob(id);
 }

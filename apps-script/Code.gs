@@ -9,6 +9,7 @@
  *   Queue      - Live work: waiting / active / delayed   (was: Jobs)
  *   Schedules  - Recurring job templates                 (was: Repeatable)
  *   History    - Completed / failed job archive          (was: JobsGraveyard)
+ *   Usage      - Daily trigger & execution counters      (quota visibility)
  */
 
 const PIPELINES_SHEET = 'Pipelines';
@@ -16,8 +17,26 @@ const QUEUE_SHEET     = 'Queue';
 const ACTIONS_SHEET   = 'Actions';
 const HISTORY_SHEET   = 'History';
 const SCHEDULES_SHEET = 'Schedules';
+const USAGE_SHEET     = 'Usage';
 const LOCK_TIMEOUT_MS = 300000;
-const MAX_JOBS_PER_RUN = 50;
+const MAX_FULL_JOBS_PER_RUN = 10;
+
+const USAGE_READ_ACTIONS = {
+  getQueues: true,
+  getProcessors: true,
+  getProcessor: true,
+  getJobs: true,
+  getJob: true,
+  getGraveyardJobs: true,
+  getRepeatableJobs: true,
+  getQueueStats: true,
+  getWorkerStats: true,
+  getUsageStats: true,
+};
+
+function isUsageReadAction(action) {
+  return Object.prototype.hasOwnProperty.call(USAGE_READ_ACTIONS, action);
+}
 
 // ============================================================================
 // WEB APP API
@@ -28,6 +47,11 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     const action = body.action;
     const data = body.data || {};
+
+    // Mutating web app calls (sync push, tests). Reads + ping tracked separately.
+    if (action && action !== 'runPingJob' && !isUsageReadAction(action)) {
+      recordUsage({ apiCalls: 1 });
+    }
 
     const handlers = {
       // Queue operations
@@ -64,10 +88,14 @@ function doPost(e) {
       // Stats
       getQueueStats: handleGetQueueStats,
       getWorkerStats: handleGetWorkerStats,
+      getUsageStats: handleGetUsageStats,
       
       // Test
       testProcessor: handleTestProcessor,
       testProcessorDraft: handleTestProcessorDraft,
+
+      // Ping (separate execution — not via minute trigger)
+      runPingJob: handleRunPingJob,
     };
 
     if (handlers[action]) {
@@ -254,7 +282,7 @@ function handleAddJob(data) {
   }
   
   const job = {
-    id: generateUUID(),
+    id: data.id || generateUUID(),
     queueName: data.queueName,
     processor: data.processor,
     data: JSON.stringify(data.data || {}),
@@ -468,6 +496,11 @@ function handleCleanGraveyard(data) {
 // ============================================================================
 
 function handleAddRepeatableJob(data) {
+  const minuteMatch = /^every-(\d+)-minutes$/.exec(String(data.pattern || '').trim());
+  if (minuteMatch && parseInt(minuteMatch[1], 10) < 5) {
+    return { success: false, error: 'Minimum recurring interval is 5 minutes' };
+  }
+
   const sheet = getOrCreateSheet(SCHEDULES_SHEET);
   ensureRepeatableHeaders(sheet);
   
@@ -631,15 +664,47 @@ function handleGetWorkerStats(data) {
   const props = PropertiesService.getScriptProperties();
   const lastRun = props.getProperty('lastWorkerRun');
   const totalProcessed = parseInt(props.getProperty('totalProcessed') || '0');
-  
+  const usageSheet = getSheet(USAGE_SHEET);
+  const todayKey = usageDateKey(new Date());
+  var usageToday = null;
+  if (usageSheet && usageSheet.getLastRow() > 1) {
+    usageToday = getUsageRowByDate(usageSheet, todayKey);
+  }
+
   return {
     success: true,
     data: {
       lastRun: lastRun,
       totalProcessed: totalProcessed,
       isRunning: false,
+      usageToday: usageToday,
     },
   };
+}
+
+function handleGetUsageStats(data) {
+  var sheet = getSheet(USAGE_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) {
+    return { success: true, data: { days: [], today: null } };
+  }
+
+  var days = getAllUsageDays(sheet);
+  days.sort(function(a, b) { return b.date.localeCompare(a.date); });
+
+  var limit = data && data.days ? parseInt(data.days, 10) : 30;
+  if (isNaN(limit) || limit < 1) limit = 30;
+  days = days.slice(0, limit);
+
+  var todayKey = usageDateKey(new Date());
+  var today = null;
+  for (var i = 0; i < days.length; i++) {
+    if (days[i].date === todayKey) {
+      today = days[i];
+      break;
+    }
+  }
+
+  return { success: true, data: { days: days, today: today } };
 }
 
 // ============================================================================
@@ -662,10 +727,19 @@ function processQueue() {
   try {
     const props = PropertiesService.getScriptProperties();
     props.setProperty('lastWorkerRun', new Date().toISOString());
-    
-    processRepeatableJobs();
-    processEligibleJobs();
-    
+
+    const started = Date.now();
+    const scheduleJobs = processRepeatableJobs();
+    const fullStats = processEligibleJobs();
+
+    recordUsage({
+      minuteTriggers: 1,
+      scheduleJobs: scheduleJobs,
+      fullCompleted: fullStats.completed,
+      fullFailed: fullStats.failed,
+      minuteRuntimeMs: Date.now() - started,
+    });
+
     const totalProcessed = parseInt(props.getProperty('totalProcessed') || '0');
     props.setProperty('totalProcessed', (totalProcessed + 1).toString());
   } catch (error) {
@@ -677,14 +751,15 @@ function processQueue() {
 
 function processRepeatableJobs() {
   const repeatableSheet = getSheet(SCHEDULES_SHEET);
-  if (!repeatableSheet) return;
-  
+  if (!repeatableSheet) return 0;
+
   const jobsSheet = getOrCreateSheet(QUEUE_SHEET);
   ensureJobHeaders(jobsSheet);
-  
+
   const repeatables = getAllRepeatableJobs(repeatableSheet);
   const now = new Date();
-  
+  var created = 0;
+
   repeatables.forEach(repeatable => {
     if (!repeatable.enabled) return;
     
@@ -706,33 +781,104 @@ function processRepeatableJobs() {
       };
       
       appendJob(jobsSheet, job);
-      
+      created++;
+
       const newNextRun = calculateNextRun(repeatable.pattern);
       updateRepeatableNextRun(repeatableSheet, repeatable.key, now.toISOString(), newNextRun.toISOString());
       
       Logger.log(`Created job from repeatable: ${repeatable.key}`);
     }
   });
+
+  return created;
 }
 
 function processEligibleJobs() {
+  const stats = { completed: 0, failed: 0 };
   const jobsSheet = getSheet(QUEUE_SHEET);
-  if (!jobsSheet) return;
+  if (!jobsSheet) return stats;
   
   const queuesSheet = getSheet(PIPELINES_SHEET);
+  const processorSheet = getSheet(ACTIONS_SHEET);
   const pausedQueues = queuesSheet ? getAllQueues(queuesSheet).filter(q => q.isPaused).map(q => q.name) : [];
   
   const jobs = getEligibleJobs(jobsSheet);
-  Logger.log(`Found ${jobs.length} eligible jobs`);
+  const fullJobs = jobs.filter(function(job) {
+    return !isPingProcessor(processorSheet, job.processor);
+  });
+  Logger.log('Found ' + jobs.length + ' eligible jobs (' + fullJobs.length + ' full)');
   
-  jobs.slice(0, MAX_JOBS_PER_RUN).forEach(job => {
+  fullJobs.slice(0, MAX_FULL_JOBS_PER_RUN).forEach(function(job) {
     if (pausedQueues.includes(job.queueName)) {
-      Logger.log(`Queue ${job.queueName} is paused, skipping job ${job.id}`);
+      Logger.log('Queue ' + job.queueName + ' is paused, skipping job ' + job.id);
       return;
     }
-    
-    executeJob(jobsSheet, job);
+
+    const outcome = executeJob(jobsSheet, job);
+    if (outcome === 'completed') stats.completed++;
+    else if (outcome === 'failed') stats.failed++;
   });
+
+  return stats;
+}
+
+function isPingProcessor(processorSheet, processorName) {
+  if (!processorSheet || !processorName) return false;
+  const processor = findProcessorByName(processorSheet, processorName);
+  return processor && processor.type === 'http_ping';
+}
+
+function handleRunPingJob(data) {
+  if (!data || !data.id) {
+    return { success: false, error: 'Job id required' };
+  }
+
+  const jobsSheet = getSheet(QUEUE_SHEET);
+  if (!jobsSheet) {
+    return { success: false, error: 'Queue sheet not found' };
+  }
+
+  const job = findJobById(jobsSheet, data.id);
+  if (!job) {
+    return { success: true, message: 'Job not found or already finished' };
+  }
+
+  if (job.state !== 'waiting' && job.state !== 'delayed') {
+    return { success: true, message: 'Job not eligible' };
+  }
+
+  const nowMs = Date.now();
+  if (job.state === 'delayed' && new Date(job.timestamp).getTime() + job.delay > nowMs) {
+    return { success: false, error: 'Job still delayed' };
+  }
+
+  const queuesSheet = getSheet(PIPELINES_SHEET);
+  if (queuesSheet) {
+    const queue = findQueueByName(queuesSheet, job.queueName);
+    if (queue && queue.isPaused) {
+      return { success: false, error: 'Queue is paused' };
+    }
+  }
+
+  const processorSheet = getSheet(ACTIONS_SHEET);
+  const processor = processorSheet ? findProcessorByName(processorSheet, job.processor) : null;
+  if (!processor || processor.type !== 'http_ping') {
+    return { success: false, error: 'Not a ping action' };
+  }
+
+  const now = new Date().toISOString();
+  updateJobFields(jobsSheet, job.id, { state: 'active', processedOn: now });
+  job.processedOn = now;
+
+  moveToGraveyard(job, {
+    state: 'completed',
+    finishedOn: now,
+    returnvalue: JSON.stringify({ dispatched: true }),
+    failedReason: null,
+  });
+
+  recordUsage({ pingRuns: 1, pingOk: 1, pingRuntimeMs: 0 });
+  return { success: true, message: 'Ping job marked dispatched' };
 }
 
 function getEligibleJobs(sheet) {
@@ -790,9 +936,11 @@ function executeJob(sheet, job) {
     });
     
     Logger.log(`Job ${job.id} completed successfully`);
+    return 'completed';
   } catch (error) {
     Logger.log(`Job ${job.id} failed: ${error.toString()}`);
     handleJobFailure(sheet, job, error.toString());
+    return findJobById(sheet, job.id) ? 'retry' : 'failed';
   }
 }
 
@@ -802,10 +950,13 @@ function executeProcessor(processor, jobData, isDryRun) {
 
   if (processor.type === 'script') {
     return executeScript(config.script, normalizedData, isDryRun);
-  } else if (processor.type === 'http') {
+  } else if (processor.type === 'http' || processor.type === 'http_ping') {
+    if (processor.type === 'http_ping') {
+      return executePingHttp(config, normalizedData);
+    }
     return executeHttp(config, normalizedData);
   } else {
-    throw new Error(`Unknown processor type: ${processor.type}`);
+    throw new Error('Unknown processor type: ' + processor.type);
   }
 }
 
@@ -926,6 +1077,46 @@ function parseHttpBodyTemplate(body) {
     }
   }
   return body;
+}
+
+function executePingHttp(config, jobData) {
+  jobData = normalizeJobData(jobData);
+
+  const options = {
+    method: config.method || 'GET',
+    headers: config.headers || {},
+    muteHttpExceptions: true,
+  };
+
+  const url = templateString(String(config.url || ''), jobData);
+
+  if (config.headers) {
+    options.headers = applyTemplate(
+      JSON.parse(JSON.stringify(config.headers)),
+      jobData
+    );
+  }
+
+  if (config.body && options.method !== 'GET') {
+    const bodyTemplate = parseHttpBodyTemplate(config.body);
+    const templatedBody = applyTemplate(bodyTemplate, jobData);
+    options.payload = typeof templatedBody === 'string'
+      ? templatedBody
+      : JSON.stringify(templatedBody);
+
+    if (!options.headers['Content-Type']) {
+      options.headers['Content-Type'] = 'application/json';
+    }
+  }
+
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+
+  if (statusCode < 200 || statusCode >= 400) {
+    throw new Error('HTTP ' + statusCode);
+  }
+
+  return { statusCode: statusCode };
 }
 
 function executeHttp(config, jobData) {
@@ -1685,6 +1876,153 @@ function deleteRepeatableByKey(sheet, key) {
 }
 
 // ============================================================================
+// SHEET HELPERS - USAGE (trigger & execution counters)
+// ============================================================================
+
+function ensureUsageHeaders(sheet) {
+  if (sheet.getLastRow() > 0) return;
+
+  const headers = [
+    'date',
+    'minuteTriggers',
+    'pingRuns',
+    'pingOk',
+    'pingFailed',
+    'fullCompleted',
+    'fullFailed',
+    'scheduleJobs',
+    'minuteRuntimeMs',
+    'pingRuntimeMs',
+    'apiCalls',
+    'lastUpdated',
+  ];
+  sheet.appendRow(headers);
+
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold')
+             .setBackground('#188038')
+             .setFontColor('#ffffff');
+
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidth(1, 110);
+}
+
+function usageDateKey(d) {
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+
+function findUsageRowNumByDate(sheet, dateKey) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === dateKey) return i + 1;
+  }
+  return null;
+}
+
+function usageRowToObject(row) {
+  const minuteTriggers = Number(row[1]) || 0;
+  const pingRuns = Number(row[2]) || 0;
+  const apiCalls = Number(row[10]) || 0;
+  return {
+    date: String(row[0]),
+    minuteTriggers: minuteTriggers,
+    pingRuns: pingRuns,
+    pingOk: Number(row[3]) || 0,
+    pingFailed: Number(row[4]) || 0,
+    fullCompleted: Number(row[5]) || 0,
+    fullFailed: Number(row[6]) || 0,
+    scheduleJobs: Number(row[7]) || 0,
+    minuteRuntimeMs: Number(row[8]) || 0,
+    pingRuntimeMs: Number(row[9]) || 0,
+    apiCalls: apiCalls,
+    totalExecutions: minuteTriggers + pingRuns + apiCalls,
+    lastUpdated: row[11] ? String(row[11]) : null,
+  };
+}
+
+function getUsageRowByDate(sheet, dateKey) {
+  const rowNum = findUsageRowNumByDate(sheet, dateKey);
+  if (!rowNum) return null;
+  const row = sheet.getRange(rowNum, 1, rowNum, 12).getValues()[0];
+  return usageRowToObject(row);
+}
+
+function getAllUsageDays(sheet) {
+  const data = sheet.getDataRange().getValues();
+  const days = [];
+  for (let i = 1; i < data.length; i++) {
+    if (!data[i][0]) continue;
+    days.push(usageRowToObject(data[i]));
+  }
+  return days;
+}
+
+/**
+ * Increment daily usage counters (UTC date bucket).
+ * Failures are logged but never block job execution.
+ */
+function recordUsage(deltas) {
+  try {
+    const sheet = getOrCreateSheet(USAGE_SHEET);
+    ensureUsageHeaders(sheet);
+    const dateKey = usageDateKey(new Date());
+    let rowNum = findUsageRowNumByDate(sheet, dateKey);
+
+    const cols = {
+      minuteTriggers: 0,
+      pingRuns: 0,
+      pingOk: 0,
+      pingFailed: 0,
+      fullCompleted: 0,
+      fullFailed: 0,
+      scheduleJobs: 0,
+      minuteRuntimeMs: 0,
+      pingRuntimeMs: 0,
+      apiCalls: 0,
+    };
+
+    if (rowNum) {
+      const existing = sheet.getRange(rowNum, 2, rowNum, 11).getValues()[0];
+      cols.minuteTriggers = Number(existing[0]) || 0;
+      cols.pingRuns = Number(existing[1]) || 0;
+      cols.pingOk = Number(existing[2]) || 0;
+      cols.pingFailed = Number(existing[3]) || 0;
+      cols.fullCompleted = Number(existing[4]) || 0;
+      cols.fullFailed = Number(existing[5]) || 0;
+      cols.scheduleJobs = Number(existing[6]) || 0;
+      cols.minuteRuntimeMs = Number(existing[7]) || 0;
+      cols.pingRuntimeMs = Number(existing[8]) || 0;
+      cols.apiCalls = Number(existing[9]) || 0;
+    } else {
+      rowNum = Math.max(sheet.getLastRow(), 1) + 1;
+    }
+
+    Object.keys(deltas || {}).forEach(function(key) {
+      if (Object.prototype.hasOwnProperty.call(cols, key)) {
+        cols[key] += Number(deltas[key]) || 0;
+      }
+    });
+
+    sheet.getRange(rowNum, 1, rowNum, 12).setValues([[
+      dateKey,
+      cols.minuteTriggers,
+      cols.pingRuns,
+      cols.pingOk,
+      cols.pingFailed,
+      cols.fullCompleted,
+      cols.fullFailed,
+      cols.scheduleJobs,
+      cols.minuteRuntimeMs,
+      cols.pingRuntimeMs,
+      cols.apiCalls,
+      new Date().toISOString(),
+    ]]);
+  } catch (error) {
+    Logger.log('recordUsage error: ' + error.toString());
+  }
+}
+
+// ============================================================================
 // UTILITIES
 // ============================================================================
 
@@ -1698,6 +2036,13 @@ function getOrCreateSheet(name) {
     sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(name);
   }
   return sheet;
+}
+
+/** Run once on an existing spreadsheet to add the Usage tab. */
+function ensureUsageSheet() {
+  const sheet = getOrCreateSheet(USAGE_SHEET);
+  ensureUsageHeaders(sheet);
+  Logger.log('Usage sheet is ready.');
 }
 
 /**
@@ -1724,6 +2069,9 @@ function setupRogerSheet() {
   const history = getOrCreateSheet(HISTORY_SHEET);
   ensureGraveyardHeaders(history);
 
+  const usage = getOrCreateSheet(USAGE_SHEET);
+  ensureUsageHeaders(usage);
+
   SpreadsheetApp.getUi().alert(
     '✅ Roger Sheet is ready!\n\n' +
     'Open the dashboard at your Next.js app URL to start adding actions and jobs.\n\n' +
@@ -1745,7 +2093,7 @@ function createGuideSheet(ss) {
     ['Roger Sheet turns Google Sheets into a job queue. You define what to do (Actions),', '', ''],
     ['add tasks (Queue), and a background trigger runs them automatically every minute.', '', ''],
     ['', '', ''],
-    ['THE 5 SHEETS', '', ''],
+    ['THE 6 SHEETS', '', ''],
     ['Tab', 'What it stores', 'When to use it'],
     ['📋 Guide', 'This help page', 'Read once'],
     ['Pipelines', 'Named pipelines + pause switch', 'Create pipelines to group your jobs'],
@@ -1753,6 +2101,7 @@ function createGuideSheet(ss) {
     ['Queue', 'Jobs waiting to run right now', 'See/manage live work'],
     ['Schedules', 'Jobs that run on a recurring pattern', 'Set up cron-like repeating jobs'],
     ['History', 'Everything that has run (done or failed)', 'Audit trail, debug failures'],
+    ['Usage', 'Daily trigger & execution counts', 'Monitor Apps Script quota usage'],
     ['', '', ''],
     ['HOW TO GET STARTED', '', ''],
     ['1.', 'Go to Actions tab → create your first action (e.g. POST to a webhook URL)', ''],
@@ -1763,7 +2112,7 @@ function createGuideSheet(ss) {
     ['', '', ''],
     ['SCHEDULE PATTERNS', '', ''],
     ['Pattern', 'Example', 'Meaning'],
-    ['every-N-minutes', 'every-5-minutes', 'Run every 5 minutes'],
+    ['every-N-minutes', 'every-5-minutes', 'Run every N minutes (minimum 5)'],
     ['every-N-hours', 'every-2-hours', 'Run every 2 hours'],
     ['daily-HH:MM', 'daily-09:30', 'Run once a day at 09:30 UTC'],
     ['', '', ''],
@@ -1772,6 +2121,7 @@ function createGuideSheet(ss) {
     ['Priority', 'Higher number = runs first. Default is 0.', ''],
     ['Retries', 'Failed jobs retry automatically up to maxAttempts times', ''],
     ['History', 'Completed jobs move here automatically — Queue stays clean', ''],
+    ['Usage', 'One row per UTC day: minute trigger runs, ping runs, full jobs, API calls', ''],
   ];
 
   guide.getRange(1, 1, rows.length, 3).setValues(rows);
@@ -1817,7 +2167,7 @@ function calculateNextRun(pattern) {
   const parts = pattern.split('-');
   
   if (parts[0] === 'every' && parts[2] === 'minutes') {
-    const minutes = parseInt(parts[1]);
+    const minutes = Math.max(parseInt(parts[1], 10) || 5, 5);
     return new Date(now.getTime() + minutes * 60 * 1000);
   }
   

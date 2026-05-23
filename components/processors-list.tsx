@@ -123,7 +123,7 @@ export function ProcessorsList({ initialProcessors, onReload }: ProcessorsListPr
                       <CardTitle className="text-xl">{processor.name}</CardTitle>
                       <Badge variant="secondary" className="flex items-center gap-1">
                         {getIcon(processor.type)}
-                        {processor.type}
+                        {processor.type === 'http_ping' ? 'ping' : processor.type}
                       </Badge>
                     </div>
                     {processor.description && (
@@ -175,7 +175,8 @@ export function ProcessorsList({ initialProcessors, onReload }: ProcessorsListPr
                       </pre>
                     </div>
                   )}
-                  {processor.type === 'http' && 'url' in processor.config && (
+                  {(processor.type === 'http' || processor.type === 'http_ping') &&
+                    'url' in processor.config && (
                     <div className="space-y-2">
                       <div className="flex gap-4">
                         <div>

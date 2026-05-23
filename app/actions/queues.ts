@@ -1,28 +1,34 @@
 'use server';
 
-import { Queue, QueueStats, ApiResponse, WorkerStats } from '@/types/job';
-import { callAppsScript } from '@/lib/apps-script';
+import { Queue, QueueStats, ApiResponse, UsageDayStats, WorkerStats } from '@/types/job';
+import * as pipelineService from '@/lib/services/pipelines';
 
 export async function createQueue(name: string): Promise<ApiResponse<Queue>> {
-  return callAppsScript<Queue>('createQueue', { name });
+  return pipelineService.createPipeline(name);
 }
 
 export async function getQueues(): Promise<ApiResponse<Queue[]>> {
-  return callAppsScript<Queue[]>('getQueues');
+  return pipelineService.listPipelines();
 }
 
 export async function getQueueStats(): Promise<ApiResponse<QueueStats[]>> {
-  return callAppsScript<QueueStats[]>('getQueueStats');
+  return pipelineService.getPipelineStats();
 }
 
 export async function pauseQueue(name: string): Promise<ApiResponse<void>> {
-  return callAppsScript<void>('pauseQueue', { name });
+  return pipelineService.pausePipeline(name);
 }
 
 export async function resumeQueue(name: string): Promise<ApiResponse<void>> {
-  return callAppsScript<void>('resumeQueue', { name });
+  return pipelineService.resumePipeline(name);
 }
 
 export async function getWorkerStats(): Promise<ApiResponse<WorkerStats>> {
-  return callAppsScript<WorkerStats>('getWorkerStats');
+  return pipelineService.getWorkerStats();
+}
+
+export async function getUsageStats(
+  days = 30
+): Promise<ApiResponse<{ days: UsageDayStats[]; today: UsageDayStats | null }>> {
+  return pipelineService.getUsageStats(days);
 }

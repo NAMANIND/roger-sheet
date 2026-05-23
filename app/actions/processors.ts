@@ -4,23 +4,24 @@ import {
   Processor,
   CreateProcessorRequest,
   ApiResponse,
+  ProcessorType,
 } from '@/types/job';
-import { callAppsScript } from '@/lib/apps-script';
+import * as actionService from '@/lib/services/actions';
 
 export async function createProcessor(
   request: CreateProcessorRequest
 ): Promise<ApiResponse<Processor>> {
-  return callAppsScript<Processor>('createProcessor', request);
+  return actionService.createAction(request);
 }
 
 export async function getProcessors(): Promise<ApiResponse<Processor[]>> {
-  return callAppsScript<Processor[]>('getProcessors');
+  return actionService.listActions();
 }
 
 export async function getProcessor(
   name: string
 ): Promise<ApiResponse<Processor>> {
-  return callAppsScript<Processor>('getProcessor', { name });
+  return actionService.getAction(name);
 }
 
 export async function updateProcessor(
@@ -28,26 +29,26 @@ export async function updateProcessor(
   config: unknown,
   description?: string
 ): Promise<ApiResponse<Processor>> {
-  return callAppsScript<Processor>('updateProcessor', { name, config, description });
+  return actionService.updateAction(name, config as never, description);
 }
 
 export async function deleteProcessor(
   name: string
 ): Promise<ApiResponse<void>> {
-  return callAppsScript<void>('deleteProcessor', { name });
+  return actionService.deleteAction(name);
 }
 
 export async function testProcessor(
   name: string,
   testData?: Record<string, unknown>
 ): Promise<ApiResponse<unknown>> {
-  return callAppsScript('testProcessor', { name, testData });
+  return actionService.testAction(name, testData);
 }
 
 export async function testProcessorDraft(
-  type: 'http' | 'script',
+  type: ProcessorType,
   config: Record<string, unknown>,
   testData?: Record<string, unknown>
 ): Promise<ApiResponse<unknown>> {
-  return callAppsScript('testProcessorDraft', { type, config, testData });
+  return actionService.testActionDraft(type, config, testData);
 }
