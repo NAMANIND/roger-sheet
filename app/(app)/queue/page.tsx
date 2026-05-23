@@ -1,34 +1,33 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
-import { Job, JobFilters, RepeatableJob } from '@/types/job';
-import { getJobs } from '@/app/actions/jobs';
-import { getRepeatableJobs } from '@/app/actions/repeatable';
+import { JobFilters } from '@/types/job';
 import { JobList } from '@/components/job-list';
 import { RepeatableJobsList } from '@/components/repeatable-jobs-list';
 import { Button } from '@/components/ui/button';
+import { useJobs, useSchedules } from '@/lib/queries/hooks';
 
 export default function QueuePage() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [repeatableJobs, setRepeatableJobs] = useState<RepeatableJob[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [filters, setFilters] = useState<JobFilters>({});
+  const {
+    data: jobs = [],
+    isLoading: jobsLoading,
+    isFetching: jobsFetching,
+    refetch: refetchJobs,
+  } = useJobs(filters, true);
+  const {
+    data: repeatableJobs = [],
+    isLoading: schedulesLoading,
+    refetch: refetchSchedules,
+  } = useSchedules(filters.queueName);
 
-  const fetchAll = async () => {
-    setIsLoading(true);
-    const [jobsResult, repeatableResult] = await Promise.all([
-      getJobs(filters),
-      getRepeatableJobs(filters.queueName),
-    ]);
-    if (jobsResult.success && jobsResult.data) setJobs(jobsResult.data);
-    if (repeatableResult.success && repeatableResult.data) setRepeatableJobs(repeatableResult.data);
-    setIsLoading(false);
+  const isLoading = jobsLoading || schedulesLoading;
+
+  const refetchAll = () => {
+    void refetchJobs();
+    void refetchSchedules();
   };
-
-  useEffect(() => {
-    fetchAll();
-  }, [filters]);
 
   return (
     <div className="space-y-8">
@@ -36,22 +35,27 @@ export default function QueuePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Queue</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Active jobs — waiting, running, and delayed
+            Active jobs — auto-refreshes every few seconds
           </p>
         </div>
-        <Link href="/queue/new">
-          <Button size="sm">New Job</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {jobsFetching && !jobsLoading && (
+            <span className="text-xs text-muted-foreground">Updating…</span>
+          )}
+          <Link href="/queue/new">
+            <Button size="sm">New Job</Button>
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
-          <p className="text-sm text-muted-foreground">Loading...</p>
+          <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       ) : (
         <>
           <section className="space-y-3">
-            <JobList jobs={jobs} onFilterChange={setFilters} onRefresh={fetchAll} />
+            <JobList jobs={jobs} onFilterChange={setFilters} onRefresh={refetchAll} />
           </section>
 
           {repeatableJobs.length > 0 && (
@@ -62,7 +66,7 @@ export default function QueuePage() {
                   Patterns that spawn new jobs automatically
                 </p>
               </div>
-              <RepeatableJobsList jobs={repeatableJobs} onRefresh={fetchAll} />
+              <RepeatableJobsList jobs={repeatableJobs} onRefresh={refetchAll} />
             </section>
           )}
         </>

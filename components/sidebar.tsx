@@ -16,9 +16,8 @@ import {
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import { SidebarUser } from '@/components/sidebar-user';
+import { SidebarUsageLine } from '@/components/sidebar-usage';
 import type { SessionUser } from '@/lib/auth/session';
-import type { UsageSnapshot } from '@/lib/services/usage';
-import { formatRemaining } from '@/lib/services/usage';
 
 type NavItem = {
   label: string;
@@ -57,21 +56,15 @@ type SidebarProps = {
   user: SessionUser | null;
   workspaceName?: string;
   planName?: string;
-  usage?: UsageSnapshot | null;
 };
 
-export function Sidebar({ user, workspaceName, planName, usage }: SidebarProps) {
+export function Sidebar({ user, workspaceName, planName }: SidebarProps) {
   const pathname = usePathname();
 
   const isActive = (href: string, exact = false) => {
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(href + '/');
   };
-
-  const usageLine =
-    usage != null
-      ? `Ping: ${formatRemaining(usage.pingCount, usage.pingLimit)} · Full: ${formatRemaining(usage.fullCount, usage.fullLimit)}`
-      : null;
 
   return (
     <aside className="flex flex-col w-60 shrink-0 h-full bg-sidebar border-r border-sidebar-border">
@@ -151,11 +144,7 @@ export function Sidebar({ user, workspaceName, planName, usage }: SidebarProps) 
           Settings
         </Link>
 
-        {usageLine && (
-          <p className="px-2 pt-2 text-[10px] text-sidebar-foreground/80 leading-tight">
-            {usageLine}
-          </p>
-        )}
+        <SidebarUsageLine />
 
         {user && workspaceName && planName && (
           <SidebarUser

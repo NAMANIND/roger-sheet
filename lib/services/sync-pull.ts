@@ -5,6 +5,10 @@ import { executionModeForActionType } from '@/lib/execution-mode';
 import { getDefaultOrganization } from '@/lib/organization';
 import { callExecutor, isExecutorConfigured } from '@/lib/executor';
 import { incrementFullUsage } from '@/lib/services/usage';
+import {
+  resolveJobOrganizationId,
+  touchSyncOrganizations,
+} from '@/lib/services/sync-org-resolve';
 import { fail, ok } from '@/lib/services/errors';
 import type { ApiResponse, Job, Processor, Queue, RepeatableJob } from '@/types/job';
 
@@ -16,7 +20,24 @@ export type PullSyncStats = {
   schedules: number;
 };
 
-/** Pull executor (Sheets) → Postgres. */
+async function buildActionModeByName(): Promise<Map<string, ExecutionMode>> {
+  const actions = await prisma.action.findMany({
+    select: { name: true, type: true },
+  });
+  return new Map(
+    actions.map((a) => [a.name, executionModeForActionType(a.type) as ExecutionMode])
+  );
+}
+
+function executionModeForJob(
+  j: Job,
+  modeByAction: Map<string, ExecutionMode>
+): ExecutionMode {
+  if (j.executionMode === 'ping') return ExecutionMode.ping;
+  return modeByAction.get(j.processor) ?? ExecutionMode.full;
+}
+
+/** Pull executor (Sheets) → Postgres. History/jobs attach to the org that created them. */
 export async function syncPullFromExecutor(): Promise<
   ApiResponse<{ stats: PullSyncStats }>
 > {
@@ -24,11 +45,11 @@ export async function syncPullFromExecutor(): Promise<
     return fail('APPS_SCRIPT_WEB_APP_URL is not configured');
   }
 
-  const org = await getDefaultOrganization();
+  const systemOrg = await getDefaultOrganization();
 
   const syncRun = await prisma.syncRun.create({
     data: {
-      organizationId: org.id,
+      organizationId: systemOrg.id,
       status: SyncRunStatus.running,
       direction: 'from_executor',
     },
@@ -43,6 +64,8 @@ export async function syncPullFromExecutor(): Promise<
   };
 
   try {
+    const modeByAction = await buildActionModeByName();
+
     const [queuesRes, processorsRes, jobsRes, graveyardRes, schedulesRes] =
       await Promise.all([
         callExecutor<Queue[]>('getQueues'),
@@ -56,10 +79,10 @@ export async function syncPullFromExecutor(): Promise<
       for (const q of queuesRes.data) {
         await prisma.pipeline.upsert({
           where: {
-            organizationId_name: { organizationId: org.id, name: q.name },
+            organizationId_name: { organizationId: systemOrg.id, name: q.name },
           },
           create: {
-            organizationId: org.id,
+            organizationId: systemOrg.id,
             name: q.name,
             isPaused: q.isPaused,
             metadata: { syncedAt: new Date().toISOString() },
@@ -75,10 +98,10 @@ export async function syncPullFromExecutor(): Promise<
       for (const p of processorsRes.data) {
         await prisma.action.upsert({
           where: {
-            organizationId_name: { organizationId: org.id, name: p.name },
+            organizationId_name: { organizationId: systemOrg.id, name: p.name },
           },
           create: {
-            organizationId: org.id,
+            organizationId: systemOrg.id,
             name: p.name,
             type: p.type as ActionType,
             config: p.config as object,
@@ -97,25 +120,16 @@ export async function syncPullFromExecutor(): Promise<
     }
 
     if (jobsRes.success && jobsRes.data) {
-      const actions = await prisma.action.findMany({
-        where: { organizationId: org.id },
-        select: { name: true, type: true },
-      });
-      const modeByAction = new Map(
-        actions.map((a) => [a.name, executionModeForActionType(a.type) as ExecutionMode])
-      );
-
       for (const j of jobsRes.data) {
+        const organizationId = await resolveJobOrganizationId(j.id);
         const data = parseJobData(j.data) as Prisma.InputJsonValue;
-        const executionMode =
-          j.executionMode === 'ping'
-            ? ExecutionMode.ping
-            : (modeByAction.get(j.processor) ?? ExecutionMode.full);
+        const executionMode = executionModeForJob(j, modeByAction);
+
         await prisma.job.upsert({
           where: { id: j.id },
           create: {
             id: j.id,
-            organizationId: org.id,
+            organizationId,
             pipelineName: j.queueName,
             actionName: j.processor,
             data,
@@ -132,6 +146,7 @@ export async function syncPullFromExecutor(): Promise<
             metadata: {},
           },
           update: {
+            organizationId,
             state: j.state as JobState,
             data,
             priority: j.priority,
@@ -144,34 +159,24 @@ export async function syncPullFromExecutor(): Promise<
     }
 
     if (graveyardRes.success && graveyardRes.data) {
-      const actions = await prisma.action.findMany({
-        where: { organizationId: org.id },
-        select: { name: true, type: true },
-      });
-      const modeByAction = new Map(
-        actions.map((a) => [a.name, executionModeForActionType(a.type) as ExecutionMode])
-      );
-
       for (const j of graveyardRes.data) {
+        const organizationId = await resolveJobOrganizationId(j.id);
         const data = parseJobData(j.data) as Prisma.InputJsonValue;
         const finishedAt = j.finishedOn
           ? new Date(j.finishedOn)
           : new Date(j.timestamp);
-        const executionMode =
-          j.executionMode === 'ping'
-            ? ExecutionMode.ping
-            : (modeByAction.get(j.processor) ?? ExecutionMode.full);
+        const executionMode = executionModeForJob(j, modeByAction);
 
         const existing = await prisma.jobHistory.findUnique({
           where: { id: j.id },
-          select: { state: true },
+          select: { state: true, organizationId: true },
         });
 
         await prisma.jobHistory.upsert({
           where: { id: j.id },
           create: {
             id: j.id,
-            organizationId: org.id,
+            organizationId,
             pipelineName: j.queueName,
             actionName: j.processor,
             data,
@@ -189,6 +194,7 @@ export async function syncPullFromExecutor(): Promise<
             metadata: {},
           },
           update: {
+            organizationId,
             state: j.state as JobState,
             data,
             finishedAt,
@@ -206,7 +212,7 @@ export async function syncPullFromExecutor(): Promise<
           !wasCompleted &&
           executionMode === ExecutionMode.full
         ) {
-          await incrementFullUsage(org.id);
+          await incrementFullUsage(organizationId);
         }
       }
     }
@@ -215,10 +221,10 @@ export async function syncPullFromExecutor(): Promise<
       for (const s of schedulesRes.data) {
         await prisma.schedule.upsert({
           where: {
-            organizationId_key: { organizationId: org.id, key: s.key },
+            organizationId_key: { organizationId: systemOrg.id, key: s.key },
           },
           create: {
-            organizationId: org.id,
+            organizationId: systemOrg.id,
             key: s.key,
             pipelineName: s.queueName,
             actionName: s.processor,
@@ -241,8 +247,9 @@ export async function syncPullFromExecutor(): Promise<
       }
     }
 
+    const orgIds = await touchSyncOrganizations();
     await prisma.executionBackend.updateMany({
-      where: { organizationId: org.id },
+      where: { organizationId: { in: orgIds } },
       data: { lastSyncAt: new Date(), lastError: null },
     });
 
@@ -266,8 +273,9 @@ export async function syncPullFromExecutor(): Promise<
         error: message,
       },
     });
+    const orgIds = await touchSyncOrganizations();
     await prisma.executionBackend.updateMany({
-      where: { organizationId: org.id },
+      where: { organizationId: { in: orgIds } },
       data: { lastError: message },
     });
     return fail(message);

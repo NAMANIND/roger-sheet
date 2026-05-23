@@ -1,4 +1,5 @@
 import { validateRepeatablePattern } from '@/lib/schedule-patterns';
+import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { mapSchedule } from '@/lib/db/mappers';
 import { getActiveOrganization } from '@/lib/organization';
@@ -10,10 +11,6 @@ import type {
   RepeatableJob,
 } from '@/types/job';
 
-function scheduleKey(jobData: AddRepeatableJobRequest): string {
-  return `${jobData.queueName}::${jobData.processor}::${jobData.pattern}`;
-}
-
 export async function addSchedule(
   jobData: AddRepeatableJobRequest
 ): Promise<ApiResponse<RepeatableJob>> {
@@ -22,17 +19,29 @@ export async function addSchedule(
 
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
-  const key = scheduleKey(jobData);
 
-  const existing = await prisma.schedule.findUnique({
-    where: { organizationId_key: { organizationId: org.id, key } },
-  });
-  if (existing) return fail('Schedule already exists');
+  const [pipeline, action] = await Promise.all([
+    prisma.pipeline.findUnique({
+      where: {
+        organizationId_name: { organizationId: org.id, name: jobData.queueName },
+      },
+    }),
+    prisma.action.findUnique({
+      where: {
+        organizationId_name: { organizationId: org.id, name: jobData.processor },
+      },
+    }),
+  ]);
+  if (!pipeline) return fail('Pipeline not found');
+  if (!action) return fail('Action not found');
+
+  const scheduleId = randomUUID();
 
   const row = await prisma.schedule.create({
     data: {
+      id: scheduleId,
       organizationId: org.id,
-      key,
+      key: scheduleId,
       pipelineName: jobData.queueName,
       actionName: jobData.processor,
       data: jobData.data ?? {},
@@ -42,8 +51,17 @@ export async function addSchedule(
     },
   });
 
-  const sync = await syncToExecutor(org.id,'addRepeatableJob', jobData, {
-    entityId: key,
+  const sync = await syncToExecutor(org.id,'addRepeatableJob', {
+    id: scheduleId,
+    key: scheduleId,
+    pipelineId: pipeline.id,
+    actionId: action.id,
+    queueName: jobData.queueName,
+    processor: jobData.processor,
+    data: jobData.data,
+    pattern: jobData.pattern,
+  }, {
+    entityId: scheduleId,
     rollback: () => prisma.schedule.delete({ where: { id: row.id } }),
   });
   if (!sync.success) return fail(sync.error ?? 'Failed to queue executor sync');

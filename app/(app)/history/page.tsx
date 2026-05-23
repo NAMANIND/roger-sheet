@@ -1,38 +1,47 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Job, GraveyardFilters } from '@/types/job';
-import { getGraveyardJobs } from '@/app/actions/jobs';
+import { useState } from 'react';
 import { GraveyardList } from '@/components/graveyard-list';
+import { useHistory } from '@/lib/queries/hooks';
+import type { GraveyardFilters } from '@/types/job';
 
 export default function HistoryPage() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [filters, setFilters] = useState<GraveyardFilters>({});
-
-  const fetchJobs = async () => {
-    setIsLoading(true);
-    const result = await getGraveyardJobs(filters);
-    if (result.success && result.data) setJobs(result.data);
-    setIsLoading(false);
-  };
-
-  useEffect(() => { fetchJobs(); }, [filters]);
+  const { data: jobs = [], isLoading, isFetching, error, refetch } = useHistory(filters);
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">History</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Completed and failed jobs. Requeue to run again, or edit and re-add.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">History</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Completed and failed jobs. Syncs from the executor automatically.
+          </p>
+        </div>
+        {isFetching && !isLoading && (
+          <span className="text-xs text-muted-foreground shrink-0 pt-1">Updating…</span>
+        )}
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error instanceof Error ? error.message : 'Failed to load history'}
+          <button type="button" onClick={() => refetch()} className="ml-3 underline">
+            Retry
+          </button>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
-          <p className="text-sm text-muted-foreground">Loading history...</p>
+          <p className="text-sm text-muted-foreground">Loading history…</p>
         </div>
       ) : (
-        <GraveyardList jobs={jobs} onFilterChange={setFilters} onRefresh={fetchJobs} />
+        <GraveyardList
+          jobs={jobs}
+          onFilterChange={setFilters}
+          onRefresh={() => refetch()}
+        />
       )}
     </div>
   );

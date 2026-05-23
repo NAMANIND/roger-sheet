@@ -37,8 +37,8 @@ export async function createAction(
     },
   });
 
-  const sync = await syncToExecutor(org.id,'createProcessor', request, {
-    entityId: request.name,
+  const sync = await syncToExecutor(org.id,'createProcessor', { id: row.id, ...request }, {
+    entityId: row.id,
     rollback: () => prisma.action.delete({ where: { id: row.id } }),
   });
   if (!sync.success) return fail(sync.error ?? 'Failed to queue executor sync');

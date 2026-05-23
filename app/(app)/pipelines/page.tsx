@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { QueueStats } from '@/types/job';
-import { getQueueStats, pauseQueue, resumeQueue, createQueue } from '@/app/actions/queues';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { pauseQueue, resumeQueue, createQueue } from '@/app/actions/queues';
 import { cleanJobs } from '@/app/actions/jobs';
+import { useQueueStats } from '@/lib/queries/hooks';
+import { queryKeys } from '@/lib/queries/keys';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -28,21 +30,17 @@ import {
 } from '@/components/ui/dialog';
 
 export default function PipelinesPage() {
-  const [stats, setStats] = useState<QueueStats[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { data: stats = [], isLoading, refetch } = useQueueStats();
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newQueueName, setNewQueueName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
 
   const fetchStats = async () => {
-    setIsLoading(true);
-    const result = await getQueueStats();
-    if (result.success && result.data) setStats(result.data);
-    setIsLoading(false);
+    await queryClient.invalidateQueries({ queryKey: queryKeys.queueStats() });
+    await refetch();
   };
-
-  useEffect(() => { fetchStats(); }, []);
 
   const handlePause = async (name: string) => {
     setActionInProgress(`pause-${name}`);

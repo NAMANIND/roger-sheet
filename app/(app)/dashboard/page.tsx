@@ -1,90 +1,46 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getQueueStats } from '@/app/actions/queues';
-import { getJobs, getGraveyardJobs } from '@/app/actions/jobs';
-import { getRepeatableJobs } from '@/app/actions/repeatable';
+import { getRelativeTime } from '@/lib/utils';
 import { QueueStatsCards } from '@/components/queue-stats';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/status-badge';
-import { getRelativeTime } from '@/lib/utils';
-import { QueueStats, Job, RepeatableJob } from '@/types/job';
+import { useDashboardData } from '@/lib/queries/hooks';
+import type { Job } from '@/types/job';
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<QueueStats[]>([]);
-  const [recentJobs, setRecentJobs] = useState<Job[]>([]);
-  const [repeatableJobs, setRepeatableJobs] = useState<RepeatableJob[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { stats, jobs, history, schedules, isLoading, error } = useDashboardData();
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    const [statsResult, jobsResult, historyResult, repeatableResult] = await Promise.all([
-      getQueueStats(),
-      getJobs({}),
-      getGraveyardJobs({}),
-      getRepeatableJobs(),
-    ]);
+  const statsData = stats.data ?? [];
+  const activeJobs = jobs.data ?? [];
+  const historyJobs = history.data ?? [];
+  const repeatableJobs = schedules.data ?? [];
 
-    if (statsResult.success && statsResult.data) setStats(statsResult.data);
-    if (jobsResult.success || historyResult.success) {
-      const active = jobsResult.success && jobsResult.data ? jobsResult.data : [];
-      const history =
-        historyResult.success && historyResult.data ? historyResult.data : [];
-      const merged = [...active, ...history].sort((a, b) => {
-        const aTime = new Date(a.finishedOn ?? a.timestamp).getTime();
-        const bTime = new Date(b.finishedOn ?? b.timestamp).getTime();
-        return bTime - aTime;
-      });
-      setRecentJobs(merged.slice(0, 8));
-    }
-    if (repeatableResult.success && repeatableResult.data) {
-      setRepeatableJobs(repeatableResult.data);
-    }
-
-    if (
-      !statsResult.success &&
-      !jobsResult.success &&
-      !historyResult.success &&
-      !repeatableResult.success
-    ) {
-      setError(
-        statsResult.error ??
-          jobsResult.error ??
-          historyResult.error ??
-          repeatableResult.error ??
-          'Failed to load dashboard'
-      );
-    }
-    setIsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const recentJobs: Job[] = [...activeJobs, ...historyJobs]
+    .sort((a, b) => {
+      const aTime = new Date(a.finishedOn ?? a.timestamp).getTime();
+      const bTime = new Date(b.finishedOn ?? b.timestamp).getTime();
+      return bTime - aTime;
+    })
+    .slice(0, 8);
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Dashboard</h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Overview of your job queue system
+          Live overview — refreshes automatically
         </p>
       </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
-          <button type="button" onClick={load} className="ml-3 underline font-medium">
-            Retry
-          </button>
+          {error instanceof Error ? error.message : 'Failed to load dashboard'}
         </div>
       )}
 
-      <QueueStatsCards stats={stats} isLoading={isLoading} />
+      <QueueStatsCards stats={statsData} isLoading={isLoading} />
 
       <div className="grid gap-5 md:grid-cols-2">
         <Card>
@@ -154,7 +110,7 @@ export default function DashboardPage() {
                   <div key={i} className="h-10 rounded bg-muted" />
                 ))}
               </div>
-            ) : stats.length === 0 ? (
+            ) : statsData.length === 0 ? (
               <div className="py-8 text-center">
                 <p className="text-sm text-muted-foreground">No pipelines yet</p>
                 <Link href="/pipelines" className="mt-3 inline-block">
@@ -163,7 +119,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <ul className="space-y-0">
-                {stats.map((queue) => (
+                {statsData.map((queue) => (
                   <li key={queue.name} className="flex items-center justify-between py-2.5 border-b border-border last:border-0">
                     <div>
                       <p className="text-sm font-medium text-foreground">{queue.name}</p>

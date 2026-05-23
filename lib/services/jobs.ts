@@ -24,14 +24,22 @@ export async function addJob(jobData: AddJobRequest): Promise<ApiResponse<Job>> 
   const id = randomUUID();
   const state = resolveInitialState(jobData.opts);
 
-  const action = await prisma.action.findUnique({
-    where: {
-      organizationId_name: { organizationId: org.id, name: jobData.processor },
-    },
-  });
-  const executionMode = action
-    ? (executionModeForActionType(action.type) as ExecutionMode)
-    : ExecutionMode.full;
+  const [pipeline, action] = await Promise.all([
+    prisma.pipeline.findUnique({
+      where: {
+        organizationId_name: { organizationId: org.id, name: jobData.queueName },
+      },
+    }),
+    prisma.action.findUnique({
+      where: {
+        organizationId_name: { organizationId: org.id, name: jobData.processor },
+      },
+    }),
+  ]);
+  if (!pipeline) return fail('Pipeline not found');
+  if (!action) return fail('Action not found');
+
+  const executionMode = executionModeForActionType(action.type) as ExecutionMode;
 
   const row = await prisma.job.create({
     data: {
@@ -53,6 +61,8 @@ export async function addJob(jobData: AddJobRequest): Promise<ApiResponse<Job>> 
     'addJob',
     {
       id,
+      pipelineId: pipeline.id,
+      actionId: action.id,
       queueName: jobData.queueName,
       processor: jobData.processor,
       data: jobData.data,

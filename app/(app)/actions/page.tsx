@@ -1,48 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { getProcessors } from '@/app/actions/processors';
 import { ProcessorsList } from '@/components/processors-list';
-import { Processor } from '@/types/job';
+import { useProcessors } from '@/lib/queries/hooks';
 
 export default function ActionsPage() {
-  const [processors, setProcessors] = useState<Processor[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    const result = await getProcessors();
-    if (result.success && result.data) {
-      setProcessors(result.data);
-    } else {
-      setError(result.error ?? 'Failed to load actions');
-    }
-    setIsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data: processors = [], isLoading, error, refetch, isFetching } = useProcessors();
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Actions</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Reusable handlers — HTTP endpoints and scripts your jobs can execute
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Actions</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Reusable handlers — HTTP endpoints and scripts your jobs can execute
+          </p>
+        </div>
+        {isFetching && !isLoading && (
+          <span className="text-xs text-muted-foreground shrink-0 pt-1">Updating…</span>
+        )}
       </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
-          <button
-            type="button"
-            onClick={load}
-            className="ml-3 underline font-medium"
-          >
+          {error instanceof Error ? error.message : 'Failed to load actions'}
+          <button type="button" onClick={() => refetch()} className="ml-3 underline">
             Retry
           </button>
         </div>
@@ -56,7 +37,7 @@ export default function ActionsPage() {
           ))}
         </div>
       ) : (
-        <ProcessorsList initialProcessors={processors} onReload={load} />
+        <ProcessorsList initialProcessors={processors} onReload={() => { void refetch(); }} />
       )}
     </div>
   );

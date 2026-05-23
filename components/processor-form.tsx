@@ -781,7 +781,7 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
                 Test action
               </CardTitle>
               <p className="text-xs text-muted-foreground font-normal">
-                Runs with parameter defaults above — no need to save first.
+                Optional — run a draft without saving. Parameters are only required when your config uses {'{param}'} placeholders.
               </p>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -789,15 +789,10 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
                 type="button"
                 variant="secondary"
                 onClick={handleTest}
-                disabled={isTesting || definedParams.length === 0}
+                disabled={isTesting}
               >
                 {isTesting ? 'Running…' : 'Run test'}
               </Button>
-              {definedParams.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Add at least one parameter to enable testing.
-                </p>
-              )}
               {testResult && (
                 testResult.success ? (
                   <ExecutionOutput

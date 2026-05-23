@@ -21,8 +21,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  DataTableEmpty,
+  DataTableShell,
+  dataTableCellClass,
+  dataTableHeadClass,
+} from '@/components/data-table-shell';
 import { getRelativeTime } from '@/lib/utils';
 import { requeueGraveyardJob, cleanGraveyard } from '@/app/actions/jobs';
+import { queryKeys } from '@/lib/queries/keys';
 import { RotateCcw, Copy, Trash2 } from 'lucide-react';
 
 interface GraveyardListProps {
@@ -33,6 +41,7 @@ interface GraveyardListProps {
 
 export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardListProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<GraveyardFilters>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [isCleaning, setIsCleaning] = useState(false);
@@ -51,6 +60,8 @@ export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardList
     try {
       const result = await requeueGraveyardJob(jobId);
       if (result.success) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.history() });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
         onRefresh?.();
         router.push('/queue');
       }
@@ -73,6 +84,7 @@ export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardList
     try {
       const result = await cleanGraveyard(olderThanMs);
       if (result.success) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.history() });
         onRefresh?.();
       }
     } finally {
@@ -142,54 +154,54 @@ export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardList
         </Button>
       </div>
 
-      <div className="border border-gray-200 rounded-lg shadow-sm bg-white">
+      <DataTableShell>
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>ID</TableHead>
-              <TableHead>Queue</TableHead>
-              <TableHead>Processor</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Finished</TableHead>
-              <TableHead>Actions</TableHead>
+            <TableRow className="hover:bg-transparent border-b border-border">
+              <TableHead className={dataTableHeadClass}>Job</TableHead>
+              <TableHead className={dataTableHeadClass}>Pipeline</TableHead>
+              <TableHead className={dataTableHeadClass}>Action</TableHead>
+              <TableHead className={dataTableHeadClass}>Status</TableHead>
+              <TableHead className={dataTableHeadClass}>Finished</TableHead>
+              <TableHead className={`${dataTableHeadClass} text-right`}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {jobs.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="text-center py-8 text-muted-foreground"
-                >
-                  No archived jobs
-                </TableCell>
-              </TableRow>
+              <DataTableEmpty
+                colSpan={6}
+                title="No history yet"
+                description="Completed and failed jobs appear here after the executor finishes them."
+              />
             ) : (
               jobs.map((job) => (
-                <TableRow key={job.id}>
-                  <TableCell className="font-mono text-xs">
-                    <Link href={`/queue/${job.id}`} className="hover:underline">
+                <TableRow key={job.id} className="border-b border-border/60">
+                  <TableCell className={`${dataTableCellClass} font-mono text-xs`}>
+                    <Link
+                      href={`/queue/${job.id}`}
+                      className="text-foreground hover:text-primary transition-colors"
+                    >
                       {job.id.substring(0, 8)}
                     </Link>
                   </TableCell>
-                  <TableCell className="font-medium">{job.queueName}</TableCell>
-                  <TableCell>
-                    <span className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground font-mono">
-                      {job.processor}
-                    </span>
+                  <TableCell className={`${dataTableCellClass} font-medium`}>
+                    {job.queueName}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={dataTableCellClass}>
+                    <code className="text-xs px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
+                      {job.processor}
+                    </code>
+                  </TableCell>
+                  <TableCell className={dataTableCellClass}>
                     <StatusBadge state={job.state} />
                   </TableCell>
-                  <TableCell className="text-sm">
-                    {job.finishedOn
-                      ? getRelativeTime(job.finishedOn)
-                      : '—'}
+                  <TableCell className={`${dataTableCellClass} text-muted-foreground`}>
+                    {job.finishedOn ? getRelativeTime(job.finishedOn) : '—'}
                   </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2 flex-wrap">
+                  <TableCell className={`${dataTableCellClass} text-right`}>
+                    <div className="flex gap-1.5 justify-end flex-wrap">
                       <Link href={`/queue/${job.id}`}>
-                        <Button variant="outline" size="sm">
+                        <Button variant="ghost" size="sm">
                           View
                         </Button>
                       </Link>
@@ -198,19 +210,17 @@ export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardList
                         size="sm"
                         onClick={() => handleRequeue(job.id)}
                         disabled={busyId === job.id}
-                        title="Move back to queue with same job ID"
                       >
                         <RotateCcw className="h-3 w-3 mr-1" />
-                        {busyId === job.id ? '...' : 'Requeue'}
+                        {busyId === job.id ? '…' : 'Requeue'}
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => handleEditAndReAdd(job.id)}
-                        title="Pre-fill create form — edit data, then submit"
                       >
                         <Copy className="h-3 w-3 mr-1" />
-                        Edit & re-add
+                        Edit
                       </Button>
                     </div>
                   </TableCell>
@@ -219,7 +229,7 @@ export function GraveyardList({ jobs, onFilterChange, onRefresh }: GraveyardList
             )}
           </TableBody>
         </Table>
-      </div>
+      </DataTableShell>
     </div>
   );
 }

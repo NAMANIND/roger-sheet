@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import { Job, JobFilters } from '@/types/job';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -21,8 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { formatDate, getRelativeTime } from '@/lib/utils';
+import {
+  DataTableEmpty,
+  DataTableShell,
+  dataTableCellClass,
+  dataTableHeadClass,
+} from '@/components/data-table-shell';
+import { getRelativeTime } from '@/lib/utils';
 import { retryJob } from '@/app/actions/jobs';
+import { queryKeys } from '@/lib/queries/keys';
 
 interface JobListProps {
   jobs: Job[];
@@ -31,6 +39,7 @@ interface JobListProps {
 }
 
 export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<JobFilters>({});
   const [retrying, setRetrying] = useState<string | null>(null);
 
@@ -48,6 +57,9 @@ export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
     try {
       const result = await retryJob(jobId);
       if (result.success) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.history() });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.queueStats() });
         onRefresh?.();
       }
     } finally {
@@ -55,25 +67,21 @@ export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
     }
   };
 
-  const getProcessorDisplay = (job: Job): string => {
-    return job.processor;
-  };
-
   return (
-    <div className="space-y-5">
-      <div className="flex gap-3 flex-wrap">
+    <div className="space-y-4">
+      <div className="flex gap-2 flex-wrap items-center">
         <Input
-          placeholder="Search jobs..."
-          className="max-w-xs font-light"
+          placeholder="Filter by queue…"
+          className="max-w-[200px] h-8"
           onChange={(e) => handleFilterChange('search', e.target.value)}
         />
-        
+
         <Select onValueChange={(value) => value && handleFilterChange('state', String(value))}>
-          <SelectTrigger className="w-[180px] font-light">
-            <SelectValue placeholder="All States" />
+          <SelectTrigger className="w-[140px] h-8">
+            <SelectValue placeholder="State" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All States</SelectItem>
+            <SelectItem value="all">All states</SelectItem>
             <SelectItem value="waiting">Waiting</SelectItem>
             <SelectItem value="active">Active</SelectItem>
             <SelectItem value="completed">Completed</SelectItem>
@@ -83,75 +91,85 @@ export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
         </Select>
 
         <Select onValueChange={(value) => value && handleFilterChange('queueName', String(value))}>
-          <SelectTrigger className="w-[180px] font-light">
-            <SelectValue placeholder="All Queues" />
+          <SelectTrigger className="w-[160px] h-8">
+            <SelectValue placeholder="Pipeline" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Queues</SelectItem>
-            {Array.from(new Set(jobs.map(j => j.queueName))).map(queueName => (
-              <SelectItem key={queueName} value={queueName}>{queueName}</SelectItem>
+            <SelectItem value="all">All pipelines</SelectItem>
+            {Array.from(new Set(jobs.map((j) => j.queueName))).map((queueName) => (
+              <SelectItem key={queueName} value={queueName}>
+                {queueName}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
 
-        <Button onClick={onRefresh} variant="outline" className="font-normal">
+        <div className="flex-1" />
+
+        <Button onClick={onRefresh} variant="outline" size="sm">
           Refresh
         </Button>
-        
         <Link href="/queue/new">
-          <Button className="font-normal">Add Job</Button>
+          <Button size="sm">Add job</Button>
         </Link>
       </div>
 
-      <div className="border border-gray-200 rounded-lg shadow-sm bg-white">
+      <DataTableShell>
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>ID</TableHead>
-              <TableHead>Queue</TableHead>
-              <TableHead>Processor</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Priority</TableHead>
-              <TableHead>Attempts</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead>Actions</TableHead>
+            <TableRow className="hover:bg-transparent border-b border-border">
+              <TableHead className={dataTableHeadClass}>Job</TableHead>
+              <TableHead className={dataTableHeadClass}>Pipeline</TableHead>
+              <TableHead className={dataTableHeadClass}>Action</TableHead>
+              <TableHead className={dataTableHeadClass}>Status</TableHead>
+              <TableHead className={dataTableHeadClass}>Priority</TableHead>
+              <TableHead className={dataTableHeadClass}>Attempts</TableHead>
+              <TableHead className={dataTableHeadClass}>Created</TableHead>
+              <TableHead className={`${dataTableHeadClass} text-right`}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {jobs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                  No jobs found
-                </TableCell>
-              </TableRow>
+              <DataTableEmpty
+                colSpan={8}
+                title="No jobs in queue"
+                description="Add a job or wait for a schedule to enqueue one."
+              />
             ) : (
               jobs.map((job) => (
-                <TableRow key={job.id}>
-                  <TableCell className="font-mono text-xs">
-                    <Link href={`/queue/${job.id}`} className="hover:underline">
+                <TableRow key={job.id} className="border-b border-border/60">
+                  <TableCell className={`${dataTableCellClass} font-mono text-xs`}>
+                    <Link
+                      href={`/queue/${job.id}`}
+                      className="text-foreground hover:text-primary transition-colors"
+                    >
                       {job.id.substring(0, 8)}
                     </Link>
                   </TableCell>
-                  <TableCell className="font-medium">{job.queueName}</TableCell>
-                  <TableCell>
-                    <span className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground font-mono">
-                      {job.processor}
-                    </span>
+                  <TableCell className={`${dataTableCellClass} font-medium`}>
+                    {job.queueName}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={dataTableCellClass}>
+                    <code className="text-xs px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
+                      {job.processor}
+                    </code>
+                  </TableCell>
+                  <TableCell className={dataTableCellClass}>
                     <StatusBadge state={job.state} />
                   </TableCell>
-                  <TableCell>{job.priority}</TableCell>
-                  <TableCell>
-                    {job.attempts} / {job.maxAttempts}
+                  <TableCell className={`${dataTableCellClass} tabular-nums text-muted-foreground`}>
+                    {job.priority}
                   </TableCell>
-                  <TableCell className="text-sm">
+                  <TableCell className={`${dataTableCellClass} tabular-nums text-muted-foreground`}>
+                    {job.attempts}/{job.maxAttempts}
+                  </TableCell>
+                  <TableCell className={`${dataTableCellClass} text-muted-foreground`}>
                     {getRelativeTime(job.timestamp)}
                   </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
+                  <TableCell className={`${dataTableCellClass} text-right`}>
+                    <div className="flex gap-1.5 justify-end">
                       <Link href={`/queue/${job.id}`}>
-                        <Button variant="outline" size="sm">
+                        <Button variant="ghost" size="sm">
                           View
                         </Button>
                       </Link>
@@ -162,7 +180,7 @@ export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
                           onClick={() => handleRetry(job.id)}
                           disabled={retrying === job.id}
                         >
-                          {retrying === job.id ? 'Retrying...' : 'Retry'}
+                          {retrying === job.id ? '…' : 'Retry'}
                         </Button>
                       )}
                     </div>
@@ -172,7 +190,7 @@ export function JobList({ jobs, onFilterChange, onRefresh }: JobListProps) {
             )}
           </TableBody>
         </Table>
-      </div>
+      </DataTableShell>
     </div>
   );
 }

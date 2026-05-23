@@ -26,9 +26,9 @@ export async function createPipeline(name: string): Promise<ApiResponse<Queue>> 
 
   const sync = await syncToExecutor(org.id,
     'createQueue',
-    { name },
+    { id: row.id, name },
     {
-      entityId: name,
+      entityId: row.id,
       rollback: () => prisma.pipeline.delete({ where: { id: row.id } }),
     }
   );
@@ -105,9 +105,9 @@ export async function pausePipeline(name: string): Promise<ApiResponse<void>> {
 
   const sync = await syncToExecutor(org.id,
     'pauseQueue',
-    { name },
+    { id: row.id, name },
     {
-      entityId: `pause:${name}`,
+      entityId: `pause:${row.id}`,
       rollback: () =>
         prisma.pipeline.update({ where: { id: row.id }, data: { isPaused: false } }),
     }
@@ -132,9 +132,9 @@ export async function resumePipeline(name: string): Promise<ApiResponse<void>> {
 
   const sync = await syncToExecutor(org.id,
     'resumeQueue',
-    { name },
+    { id: row.id, name },
     {
-      entityId: `resume:${name}`,
+      entityId: `resume:${row.id}`,
       rollback: () =>
         prisma.pipeline.update({ where: { id: row.id }, data: { isPaused: true } }),
     }

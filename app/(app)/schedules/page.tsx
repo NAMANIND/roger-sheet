@@ -1,24 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { RepeatableJob } from '@/types/job';
-import { getRepeatableJobs } from '@/app/actions/repeatable';
 import { RepeatableJobsList } from '@/components/repeatable-jobs-list';
 import { Button } from '@/components/ui/button';
+import { useSchedules } from '@/lib/queries/hooks';
 
 export default function SchedulesPage() {
-  const [jobs, setJobs] = useState<RepeatableJob[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const fetchJobs = async () => {
-    setIsLoading(true);
-    const result = await getRepeatableJobs();
-    if (result.success && result.data) setJobs(result.data);
-    setIsLoading(false);
-  };
-
-  useEffect(() => { fetchJobs(); }, []);
+  const { data: jobs = [], isLoading, isFetching, refetch } = useSchedules();
 
   return (
     <div className="space-y-8">
@@ -29,17 +17,22 @@ export default function SchedulesPage() {
             Recurring jobs that automatically create new queue entries on a pattern
           </p>
         </div>
-        <Link href="/queue/new">
-          <Button size="sm">New Schedule</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {isFetching && !isLoading && (
+            <span className="text-xs text-muted-foreground">Updating…</span>
+          )}
+          <Link href="/queue/new">
+            <Button size="sm">New Schedule</Button>
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
-          <p className="text-sm text-muted-foreground">Loading schedules...</p>
+          <p className="text-sm text-muted-foreground">Loading schedules…</p>
         </div>
       ) : (
-        <RepeatableJobsList jobs={jobs} onRefresh={fetchJobs} />
+        <RepeatableJobsList jobs={jobs} onRefresh={() => refetch()} />
       )}
     </div>
   );
