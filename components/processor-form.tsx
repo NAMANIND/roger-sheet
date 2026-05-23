@@ -421,7 +421,8 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
         const result = await updateProcessor(
           processor.id,
           config,
-          description.trim() || undefined
+          description.trim() || undefined,
+          processorType
         );
 
         if (result.success) {
@@ -500,15 +501,13 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
           <Tabs
             value={processorType === 'script' ? 'script' : 'http'}
             onValueChange={(v) => {
-              if (!isEdit) setProcessorType(v === 'script' ? 'script' : 'http');
+              setProcessorType(v === 'script' ? 'script' : 'http');
             }}
           >
-            {!isEdit && (
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="script">Custom Script</TabsTrigger>
-                <TabsTrigger value="http">HTTP Request</TabsTrigger>
-              </TabsList>
-            )}
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="script">Custom Script</TabsTrigger>
+              <TabsTrigger value="http">HTTP Request</TabsTrigger>
+            </TabsList>
 
             <TabsContent value="script" className="space-y-4">
               <div className="space-y-2">
@@ -545,38 +544,31 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
             </TabsContent>
 
             <TabsContent value="http" className="space-y-4">
-              {!isEdit && (
-                <div className="rounded-md border bg-muted/40 p-3 space-y-2">
-                  <p className="text-sm font-medium">Execution mode</p>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        name="httpMode"
-                        checked={processorType === 'http'}
-                        onChange={() => setProcessorType('http')}
-                        className="h-4 w-4"
-                      />
-                      Full — logs and response in History
-                    </label>
-                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        name="httpMode"
-                        checked={processorType === 'http_ping'}
-                        onChange={() => setProcessorType('http_ping')}
-                        className="h-4 w-4"
-                      />
-                      Ping — fire webhook, no wait for response
-                    </label>
-                  </div>
+              <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+                <p className="text-sm font-medium">Execution mode</p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="httpMode"
+                      checked={processorType === 'http'}
+                      onChange={() => setProcessorType('http')}
+                      className="h-4 w-4"
+                    />
+                    Full — logs and response in History
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="httpMode"
+                      checked={processorType === 'http_ping'}
+                      onChange={() => setProcessorType('http_ping')}
+                      className="h-4 w-4"
+                    />
+                    Ping — fire webhook, no wait for response
+                  </label>
                 </div>
-              )}
-              {isEdit && processorType === 'http_ping' && (
-                <p className="text-sm text-muted-foreground">
-                  Ping action — webhook is fired from the platform without waiting for a response.
-                </p>
-              )}
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="url">URL</Label>
                 <Input

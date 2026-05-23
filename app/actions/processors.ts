@@ -25,9 +25,10 @@ export async function getProcessor(id: string): Promise<ApiResponse<Processor>> 
 export async function updateProcessor(
   id: string,
   config: unknown,
-  description?: string
+  description?: string,
+  type?: ProcessorType
 ): Promise<ApiResponse<Processor>> {
-  return actionService.updateAction(id, config as never, description);
+  return actionService.updateAction(id, config as never, description, type);
 }
 
 export async function deleteProcessor(

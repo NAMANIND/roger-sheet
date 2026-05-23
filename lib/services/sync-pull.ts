@@ -4,7 +4,7 @@ import { parseJobData } from '@/lib/job-data';
 import { executionModeForActionType } from '@/lib/execution-mode';
 import { getDefaultOrganization } from '@/lib/organization';
 import { callExecutor, isExecutorConfigured } from '@/lib/executor';
-import { incrementFullUsage } from '@/lib/services/usage';
+import { incrementFullUsage, incrementPingUsage } from '@/lib/services/usage';
 import {
   resolveJobOrganizationId,
   touchSyncOrganizations,
@@ -257,6 +257,7 @@ export async function syncPullFromExecutor(): Promise<
             attempts: j.attempts,
             pipelineName: names.pipelineName,
             actionName: names.actionName,
+            executionMode,
             executorSyncedAt: new Date(),
           },
         });
@@ -323,12 +324,12 @@ export async function syncPullFromExecutor(): Promise<
 
         const completed = j.state === JobState.completed;
         const wasCompleted = existing?.state === JobState.completed;
-        if (
-          completed &&
-          !wasCompleted &&
-          executionMode === ExecutionMode.full
-        ) {
-          await incrementFullUsage(organizationId);
+        if (completed && !wasCompleted) {
+          if (executionMode === ExecutionMode.full) {
+            await incrementFullUsage(organizationId);
+          } else if (executionMode === ExecutionMode.ping) {
+            await incrementPingUsage(organizationId);
+          }
         }
       }
     }

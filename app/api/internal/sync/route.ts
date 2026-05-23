@@ -8,7 +8,7 @@ function unauthorized() {
 export type SyncRequestBody = {
   /** Drain outbox → Apps Script (default: true) */
   push?: boolean;
-  /** Run waiting Ping jobs via separate Script calls (default: true when push runs) */
+  /** Run waiting Ping jobs from Postgres (optional — Apps Script trigger handles http_ping by default) */
   pings?: boolean;
   /** Sheets → Postgres (default: true) */
   pull?: boolean;
@@ -24,6 +24,7 @@ export type SyncRequestBody = {
  * POST /api/internal/sync
  * Authorization: Bearer <INTERNAL_API_SECRET>
  * Body: { "push": true, "pull": true }
+ * Optional: { "pings": true } for Postgres-side ping dispatch (legacy fallback)
  */
 export async function POST(request: NextRequest) {
   const secret = process.env.INTERNAL_API_SECRET;

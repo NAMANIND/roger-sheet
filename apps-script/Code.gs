@@ -20,6 +20,7 @@ const SCHEDULES_SHEET = 'Schedules';
 const USAGE_SHEET     = 'Usage';
 const LOCK_TIMEOUT_MS = 300000;
 const MAX_FULL_JOBS_PER_RUN = 10;
+const MAX_PING_JOBS_PER_RUN = 25;
 
 const USAGE_READ_ACTIONS = {
   getQueues: true,
@@ -94,7 +95,7 @@ function doPost(e) {
       testProcessor: handleTestProcessor,
       testProcessorDraft: handleTestProcessorDraft,
 
-      // Ping (separate execution — not via minute trigger)
+      // Ping completion sync from platform (legacy — trigger runs ping jobs directly)
       runPingJob: handleRunPingJob,
     };
 
@@ -826,14 +827,19 @@ function processQueue() {
 
     const started = Date.now();
     const scheduleJobs = processRepeatableJobs();
+    const pingStats = processEligiblePingJobs();
     const fullStats = processEligibleJobs();
 
     recordUsage({
       minuteTriggers: 1,
       scheduleJobs: scheduleJobs,
+      pingRuns: pingStats.completed + pingStats.failed,
+      pingOk: pingStats.completed,
+      pingFailed: pingStats.failed,
       fullCompleted: fullStats.completed,
       fullFailed: fullStats.failed,
       minuteRuntimeMs: Date.now() - started,
+      pingRuntimeMs: pingStats.runtimeMs,
     });
 
     const totalProcessed = parseInt(props.getProperty('totalProcessed') || '0');
@@ -915,6 +921,39 @@ function processEligibleJobs() {
     }
 
     const outcome = executeJob(jobsSheet, job);
+    if (outcome === 'completed') stats.completed++;
+    else if (outcome === 'failed') stats.failed++;
+  });
+
+  return stats;
+}
+
+function processEligiblePingJobs() {
+  const stats = { completed: 0, failed: 0, runtimeMs: 0 };
+  const jobsSheet = getSheet(QUEUE_SHEET);
+  if (!jobsSheet) return stats;
+
+  const queuesSheet = getSheet(PIPELINES_SHEET);
+  const processorSheet = getSheet(ACTIONS_SHEET);
+  const pausedPipelineIds = queuesSheet
+    ? getAllQueues(queuesSheet).filter(q => q.isPaused).map(q => q.id)
+    : [];
+
+  const jobs = getEligibleJobs(jobsSheet);
+  const pingJobs = jobs.filter(function(job) {
+    return isPingProcessor(processorSheet, job.actionId || job.processor);
+  });
+  Logger.log('Found ' + pingJobs.length + ' eligible ping jobs');
+
+  pingJobs.slice(0, MAX_PING_JOBS_PER_RUN).forEach(function(job) {
+    if (pausedPipelineIds.includes(job.pipelineId)) {
+      Logger.log('Pipeline ' + job.queueName + ' is paused, skipping ping job ' + job.id);
+      return;
+    }
+
+    const jobStarted = Date.now();
+    const outcome = executeJob(jobsSheet, job);
+    stats.runtimeMs += Date.now() - jobStarted;
     if (outcome === 'completed') stats.completed++;
     else if (outcome === 'failed') stats.failed++;
   });

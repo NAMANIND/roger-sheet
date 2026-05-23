@@ -23,7 +23,7 @@ export type UnifiedSyncResult = {
 
 export type SyncRunOptions = {
   push?: boolean;
-  /** Dispatch waiting Ping jobs via separate Script executions (default: true when push runs) */
+  /** Dispatch waiting Ping jobs from Postgres (optional legacy fallback — Apps Script trigger runs http_ping jobs) */
   pings?: boolean;
   pull?: boolean;
   pushLimit?: number;
@@ -32,7 +32,8 @@ export type SyncRunOptions = {
 
 /**
  * Phase B entrypoint for your infrastructure.
- * POST /api/internal/sync with { "push": true, "pings": true, "pull": true }
+ * POST /api/internal/sync with { "push": true, "pull": true }
+ * Optional: "pings": true to dispatch http_ping jobs from Postgres (normally handled by Apps Script trigger)
  */
 export async function runSync(
   options: SyncRunOptions = {}
@@ -40,7 +41,7 @@ export async function runSync(
   const start = Date.now();
   const doPush = options.push !== false;
   const doPull = options.pull !== false;
-  const doPings = options.pings !== false && doPush;
+  const doPings = options.pings === true;
 
   if (!doPush && !doPull) {
     return fail('At least one of push or pull must be true');
@@ -55,16 +56,16 @@ export async function runSync(
     result.push = pushResult.data;
   }
 
-  if (doPings) {
-    const pingResult = await dispatchPendingPingJobs(options.pingLimit);
-    if (!pingResult.success) return fail(pingResult.error ?? 'Ping dispatch failed');
-    result.pings = pingResult.data;
-  }
-
   if (doPull) {
     const pullResult = await syncPullFromExecutor();
     if (!pullResult.success) return fail(pullResult.error ?? 'Pull failed');
     result.pull = pullResult.data?.stats;
+  }
+
+  if (doPings) {
+    const pingResult = await dispatchPendingPingJobs(options.pingLimit);
+    if (!pingResult.success) return fail(pingResult.error ?? 'Ping dispatch failed');
+    result.pings = pingResult.data;
   }
 
   result.durationMs = Date.now() - start;

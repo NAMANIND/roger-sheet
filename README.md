@@ -458,4 +458,7 @@ curl -X POST http://localhost:3000/api/internal/sync \
  -H "Authorization: Bearer YOUR_INTERNAL_API_SECRET" \
  -H "Content-Type: application/json" \
  -d '{"push": true, "pull": true}'
+
+Push drains the outbox to Sheets; pull imports completed jobs and state. `http_ping` jobs run on the Apps Script minute trigger — you do not need `"pings": true` here unless you want the legacy Postgres-side dispatch fallback.
+
 Or locally: npm run db:sync

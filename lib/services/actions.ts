@@ -76,7 +76,8 @@ export async function getAction(id: string): Promise<ApiResponse<Processor>> {
 export async function updateAction(
   id: string,
   config: ProcessorConfig,
-  description?: string
+  description?: string,
+  type?: ProcessorType
 ): Promise<ApiResponse<Processor>> {
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
@@ -86,19 +87,30 @@ export async function updateAction(
   });
   if (!row) return fail('Action not found');
 
-  const previous = { config: row.config, description: row.description };
+  const previous = {
+    config: row.config,
+    description: row.description,
+    type: row.type,
+  };
 
   const updated = await prisma.action.update({
     where: { id: row.id },
     data: {
       config: config as object,
       description: description ?? row.description,
+      ...(type ? { type: type as ActionType } : {}),
     },
   });
 
   const sync = await syncToExecutor(org.id,
     'updateProcessor',
-    { id: row.id, name: row.name, config, description },
+    {
+      id: row.id,
+      name: row.name,
+      type: type ?? row.type,
+      config,
+      description: description ?? row.description,
+    },
     {
       entityId: row.id,
       rollback: () =>
@@ -107,6 +119,7 @@ export async function updateAction(
           data: {
             config: previous.config as object,
             description: previous.description,
+            type: previous.type,
           },
         }),
     }
