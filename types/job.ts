@@ -50,6 +50,8 @@ export interface CreateProcessorRequest {
 
 export interface Job {
   id: string;
+  pipelineId?: string;
+  actionId?: string;
   queueName: string;
   processor: string;
   data: Record<string, any>;
@@ -101,6 +103,7 @@ export interface Queue {
 }
 
 export interface QueueStats {
+  id?: string;
   name: string;
   total: number;
   waiting: number;

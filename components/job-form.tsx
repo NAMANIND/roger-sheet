@@ -15,10 +15,11 @@ import {
 } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { AddJobRequest, JobFormPrefill, Processor } from '@/types/job';
+import { AddJobRequest, JobFormPrefill, Processor, Queue } from '@/types/job';
 import { addJob } from '@/app/actions/jobs';
 import { addRepeatableJob } from '@/app/actions/repeatable';
 import { getProcessors } from '@/app/actions/processors';
+import { getQueues } from '@/app/actions/queues';
 import { pairsFromDefinitions } from '@/lib/params';
 import {
   IMMEDIATE_EXECUTION_LABEL,
@@ -52,7 +53,7 @@ interface JobFormProps {
 }
 
 export function JobForm({
-  queueName: initialQueueName = 'default',
+  queueName: initialQueueName,
   prefill,
   sourceJobId,
 }: JobFormProps) {
@@ -60,10 +61,11 @@ export function JobForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [processors, setProcessors] = useState<Processor[]>([]);
-  const [isLoadingProcessors, setIsLoadingProcessors] = useState(true);
+  const [pipelines, setPipelines] = useState<Queue[]>([]);
+  const [isLoadingForm, setIsLoadingForm] = useState(true);
   const [prefillApplied, setPrefillApplied] = useState(false);
 
-  const [queue, setQueue] = useState(initialQueueName);
+  const [queue, setQueue] = useState(initialQueueName ?? '');
   const [selectedProcessor, setSelectedProcessor] = useState(prefill?.processor ?? '');
   const [dataInputMode, setDataInputMode] = useState<DataInputMode>('simple');
   const [keyValuePairs, setKeyValuePairs] = useState<KeyValuePair[]>(
@@ -83,7 +85,7 @@ export function JobForm({
   const [cronPattern, setCronPattern] = useState('every-5-minutes');
 
   useEffect(() => {
-    loadProcessors();
+    loadFormOptions();
   }, []);
 
   useEffect(() => {
@@ -98,21 +100,32 @@ export function JobForm({
     setPrefillApplied(true);
   }, [prefill, processors, prefillApplied]);
 
-  const loadProcessors = async () => {
+  const loadFormOptions = async () => {
     try {
-      const result = await getProcessors();
-      if (result.success && result.data) {
-        setProcessors(result.data);
-        if (result.data.length > 0 && !prefill) {
-          const first = result.data[0];
+      const [processorsResult, pipelinesResult] = await Promise.all([
+        getProcessors(),
+        getQueues(),
+      ]);
+
+      if (pipelinesResult.success && pipelinesResult.data) {
+        setPipelines(pipelinesResult.data);
+        if (!prefill && !initialQueueName && pipelinesResult.data.length > 0) {
+          setQueue(pipelinesResult.data[0].name);
+        }
+      }
+
+      if (processorsResult.success && processorsResult.data) {
+        setProcessors(processorsResult.data);
+        if (processorsResult.data.length > 0 && !prefill) {
+          const first = processorsResult.data[0];
           setSelectedProcessor(first.name);
           applyProcessorParams(first);
         }
       }
     } catch (error) {
-      console.error('Failed to load processors:', error);
+      console.error('Failed to load job form options:', error);
     } finally {
-      setIsLoadingProcessors(false);
+      setIsLoadingForm(false);
     }
   };
 
@@ -254,12 +267,30 @@ export function JobForm({
     }
   };
 
-  if (isLoadingProcessors) {
+  if (isLoadingForm) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Loading processors...</CardTitle>
+          <CardTitle>Loading form...</CardTitle>
         </CardHeader>
+      </Card>
+    );
+  }
+
+  if (pipelines.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>No Pipelines Found</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-4">
+            Create a pipeline before adding jobs.
+          </p>
+          <Button onClick={() => router.push('/pipelines')}>
+            Create Pipeline
+          </Button>
+        </CardContent>
       </Card>
     );
   }
@@ -308,14 +339,20 @@ export function JobForm({
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="queue">Queue</Label>
-            <Input
-              id="queue"
-              value={queue}
-              onChange={(e) => setQueue(e.target.value)}
-              placeholder="default"
-              required
-            />
+            <Label htmlFor="queue">Pipeline</Label>
+            <Select value={queue} onValueChange={(value) => value && setQueue(value)}>
+              <SelectTrigger id="queue">
+                <SelectValue placeholder="Select pipeline" />
+              </SelectTrigger>
+              <SelectContent>
+                {pipelines.map((pipeline) => (
+                  <SelectItem key={pipeline.name} value={pipeline.name}>
+                    {pipeline.name}
+                    {pipeline.isPaused ? ' (paused)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2">
@@ -508,7 +545,7 @@ export function JobForm({
           </div>
 
           <div className="flex gap-2">
-            <Button type="submit" disabled={isSubmitting || !selectedProcessor}>
+            <Button type="submit" disabled={isSubmitting || !selectedProcessor || !queue}>
               {isSubmitting
                 ? 'Creating...'
                 : executionType === 'schedule' && scheduleType === 'repeatable'

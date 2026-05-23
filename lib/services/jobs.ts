@@ -5,6 +5,8 @@ import { mapJob } from '@/lib/db/mappers';
 import { executionModeForActionType } from '@/lib/execution-mode';
 import { getActiveOrganization } from '@/lib/organization';
 import { syncToExecutor } from '@/lib/services/executor-sync';
+import { resolveJobDisplayNames } from '@/lib/services/job-display-names';
+import { isExecutorId } from '@/lib/services/executor-normalize';
 import { fail, ok } from '@/lib/services/errors';
 import type {
   AddJobRequest,
@@ -38,6 +40,12 @@ export async function addJob(jobData: AddJobRequest): Promise<ApiResponse<Job>> 
   ]);
   if (!pipeline) return fail('Pipeline not found');
   if (!action) return fail('Action not found');
+
+  const { ensureActionOnExecutor, ensurePipelineOnExecutor } = await import(
+    '@/lib/services/executor-ensure'
+  );
+  await ensurePipelineOnExecutor(org.id, pipeline);
+  await ensureActionOnExecutor(org.id, action);
 
   const executionMode = executionModeForActionType(action.type) as ExecutionMode;
 
@@ -98,6 +106,15 @@ export async function listJobs(filters?: JobFilters): Promise<ApiResponse<Job[]>
   });
 
   let jobs = rows.map((r) => mapJob(r));
+  if (org) {
+    jobs = await Promise.all(
+      jobs.map(async (job) => {
+        if (!isExecutorId(job.queueName) && !isExecutorId(job.processor)) return job;
+        const names = await resolveJobDisplayNames(org.id, job.queueName, job.processor);
+        return { ...job, queueName: names.pipelineName, processor: names.actionName };
+      })
+    );
+  }
   if (filters?.search) {
     const q = filters.search.toLowerCase();
     jobs = jobs.filter(

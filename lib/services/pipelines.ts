@@ -65,6 +65,7 @@ export async function getPipelineStats(): Promise<ApiResponse<QueueStats[]>> {
     }),
   ]);
 
+  const idByName = new Map(pipelines.map((p) => [p.name, p.id]));
   const pausedByName = new Map(pipelines.map((p) => [p.name, p.isPaused]));
   const pipelineNames = new Set<string>([
     ...pipelines.map((p) => p.name),
@@ -76,6 +77,7 @@ export async function getPipelineStats(): Promise<ApiResponse<QueueStats[]>> {
     const queueActive = activeJobs.filter((j) => j.pipelineName === name);
     const queueHistory = historyJobs.filter((j) => j.pipelineName === name);
     return {
+      id: idByName.get(name),
       name,
       total: queueActive.length + queueHistory.length,
       waiting: queueActive.filter((j) => j.state === JobState.waiting).length,

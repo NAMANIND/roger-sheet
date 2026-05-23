@@ -147,7 +147,6 @@ export async function getSession(): Promise<AuthContext | null> {
     if (session) {
       await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     }
-    await clearSessionCookie();
     return null;
   }
 

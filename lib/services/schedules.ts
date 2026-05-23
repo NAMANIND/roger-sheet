@@ -35,6 +35,12 @@ export async function addSchedule(
   if (!pipeline) return fail('Pipeline not found');
   if (!action) return fail('Action not found');
 
+  const { ensureActionOnExecutor, ensurePipelineOnExecutor } = await import(
+    '@/lib/services/executor-ensure'
+  );
+  await ensurePipelineOnExecutor(org.id, pipeline);
+  await ensureActionOnExecutor(org.id, action);
+
   const scheduleId = randomUUID();
 
   const row = await prisma.schedule.create({
@@ -94,8 +100,8 @@ export async function removeSchedule(key: string): Promise<ApiResponse<void>> {
 
   await prisma.schedule.delete({ where: { id: row.id } });
 
-  const sync = await syncToExecutor(org.id,'removeRepeatableJob', { key }, {
-    entityId: key,
+  const sync = await syncToExecutor(org.id,'removeRepeatableJob', { id: row.id, key: row.key }, {
+    entityId: row.id,
     rollback: () =>
       prisma.schedule.create({
         data: {
@@ -134,9 +140,9 @@ export async function toggleSchedule(
 
   const sync = await syncToExecutor(org.id,
     'toggleRepeatableJob',
-    { key, enabled },
+    { id: row.id, key: row.key, enabled },
     {
-      entityId: `toggle:${key}`,
+      entityId: `toggle:${row.id}`,
       rollback: () =>
         prisma.schedule.update({
           where: { id: row.id },

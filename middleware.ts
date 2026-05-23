@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { SESSION_COOKIE } from '@/lib/auth/constants';
+import { ONBOARDING_COOKIE, SESSION_COOKIE } from '@/lib/auth/constants';
 
 const PUBLIC_PATHS = new Set(['/', '/login']);
 
@@ -20,8 +20,16 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (isPublicPath(pathname)) {
-    if (pathname === '/login' && hasSessionCookie(request)) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
+    if (pathname === '/login') {
+      if (request.nextUrl.searchParams.get('session') === 'invalid') {
+        const response = NextResponse.next();
+        response.cookies.delete(SESSION_COOKIE);
+        response.cookies.delete(ONBOARDING_COOKIE);
+        return response;
+      }
+      if (hasSessionCookie(request)) {
+        return NextResponse.redirect(new URL('/dashboard', request.url));
+      }
     }
     return NextResponse.next();
   }

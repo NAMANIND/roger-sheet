@@ -50,7 +50,7 @@ function inferActionType(config: ProcessorConfig): ActionType {
 /** Old deployed Apps Script can read id-first sheet rows with the legacy column map. */
 export function normalizeExecutorProcessor(
   raw: Processor & { id?: string }
-): Processor & { id: string } {
+): (Processor & { id?: string }) | null {
   let id = raw.id;
   let name = raw.name;
   let type = raw.type;
@@ -69,18 +69,13 @@ export function normalizeExecutorProcessor(
     createdAt = new Date().toISOString();
   }
 
-  if (!id) {
-    throw new Error(`Action "${name}" is missing an id from the executor`);
-  }
-  if (!name?.trim()) {
-    throw new Error(`Action ${id} is missing a name from the executor`);
-  }
+  if (!name?.trim()) return null;
   if (!ACTION_TYPES.has(String(type))) {
     type = inferActionType(config);
   }
 
   return {
-    id,
+    id: id && isExecutorId(id) ? id : undefined,
     name,
     type: type as Processor['type'],
     config,
@@ -94,7 +89,7 @@ export function normalizeExecutorProcessor(
 
 export function normalizeExecutorQueue(
   raw: Queue & { id?: string }
-): Queue & { id: string } {
+): (Queue & { id?: string }) | null {
   let id = raw.id;
   let name = raw.name;
   let isPaused = raw.isPaused;
@@ -107,15 +102,10 @@ export function normalizeExecutorQueue(
     createdAt = new Date().toISOString();
   }
 
-  if (!id) {
-    throw new Error(`Pipeline "${name}" is missing an id from the executor`);
-  }
-  if (!name?.trim()) {
-    throw new Error(`Pipeline ${id} is missing a name from the executor`);
-  }
+  if (!name?.trim()) return null;
 
   return {
-    id,
+    id: id && isExecutorId(id) ? id : undefined,
     name,
     isPaused: Boolean(isPaused),
     createdAt: parseExecutorDate(createdAt).toISOString(),

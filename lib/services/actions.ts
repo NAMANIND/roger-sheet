@@ -90,9 +90,9 @@ export async function updateAction(
 
   const sync = await syncToExecutor(org.id,
     'updateProcessor',
-    { name, config, description },
+    { id: row.id, name: row.name, config, description },
     {
-      entityId: name,
+      entityId: row.id,
       rollback: () =>
         prisma.action.update({
           where: { id: row.id },
@@ -118,8 +118,8 @@ export async function deleteAction(name: string): Promise<ApiResponse<void>> {
 
   await prisma.action.delete({ where: { id: row.id } });
 
-  const sync = await syncToExecutor(org.id,'deleteProcessor', { name }, {
-    entityId: name,
+  const sync = await syncToExecutor(org.id,'deleteProcessor', { id: row.id, name: row.name }, {
+    entityId: row.id,
     rollback: () =>
       prisma.action.create({
         data: {
@@ -143,7 +143,13 @@ export async function testAction(
   name: string,
   testData?: Record<string, unknown>
 ): Promise<ApiResponse<unknown>> {
-  return callExecutor('testProcessor', { name, testData });
+  const org = await getActiveOrganization();
+  if (!org) return fail('Unauthorized');
+  const row = await prisma.action.findUnique({
+    where: { organizationId_name: { organizationId: org.id, name } },
+  });
+  if (!row) return fail('Action not found');
+  return callExecutor('testProcessor', { id: row.id, name: row.name, testData });
 }
 
 export async function testActionDraft(

@@ -1,5 +1,6 @@
 import { fail, ok } from '@/lib/services/errors';
 import { pushOutboxToExecutor } from '@/lib/services/sync-push';
+import { reconcileExecutorEntities } from '@/lib/services/executor-ensure';
 import type { PushOutboxStats } from '@/lib/services/outbox';
 import {
   syncPullFromExecutor,
@@ -48,6 +49,7 @@ export async function runSync(
   const result: UnifiedSyncResult = { durationMs: 0 };
 
   if (doPush) {
+    await reconcileExecutorEntities();
     const pushResult = await pushOutboxToExecutor(options.pushLimit);
     if (!pushResult.success) return fail(pushResult.error ?? 'Push failed');
     result.push = pushResult.data;

@@ -19,6 +19,7 @@ import { parseJobData } from '@/lib/job-data';
 
 export function mapPipeline(row: Pipeline): Queue {
   return {
+    id: row.id,
     name: row.name,
     isPaused: row.isPaused,
     createdAt: row.createdAt.toISOString(),
@@ -27,6 +28,7 @@ export function mapPipeline(row: Pipeline): Queue {
 
 export function mapAction(row: DbAction): Processor {
   return {
+    id: row.id,
     name: row.name,
     type: row.type as ProcessorType,
     config: row.config as unknown as ProcessorConfig,
@@ -71,6 +73,7 @@ export function mapJob(
 
 export function mapSchedule(row: Schedule): RepeatableJob {
   return {
+    id: row.id,
     key: row.key,
     queueName: row.pipelineName,
     processor: row.actionName,

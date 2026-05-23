@@ -140,27 +140,58 @@ function handleCreateProcessor(data) {
   ensureProcessorHeaders(sheet);
 
   const id = data.id || generateUUID();
-  if (findProcessorById(sheet, id)) {
-    return { success: false, error: 'Action id already exists' };
-  }
-  if (findProcessorByName(sheet, data.name)) {
-    return { success: false, error: 'Action name already exists' };
+  const existingById = findProcessorById(sheet, id);
+  if (existingById) {
+    writeProcessorRow(sheet, id, {
+      name: data.name,
+      type: data.type,
+      config: JSON.stringify(data.config),
+      description: data.description || '',
+    });
+    const processor = resolveActionRef(sheet, id);
+    return {
+      success: true,
+      data: Object.assign({}, processor, { config: data.config }),
+      message: 'Processor updated successfully',
+    };
   }
 
-  const processor = {
+  const existingByName = findProcessorByName(sheet, data.name);
+  if (existingByName) {
+    var rowIndex = findProcessorRowIndex(sheet, existingByName.id || data.name);
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex + 1, 1, rowIndex + 1, 6).setValues([[
+        id,
+        data.name,
+        data.type,
+        JSON.stringify(data.config),
+        data.description || '',
+        existingByName.createdAt || new Date().toISOString(),
+      ]]);
+    }
+    repairActionSheet(sheet);
+    const processor = resolveActionRef(sheet, id);
+    return {
+      success: true,
+      data: Object.assign({}, processor, { config: data.config }),
+      message: 'Processor linked successfully',
+    };
+  }
+
+  appendProcessor(sheet, {
     id: id,
     name: data.name,
     type: data.type,
     config: JSON.stringify(data.config),
     description: data.description || '',
     createdAt: new Date().toISOString(),
-  };
+  });
 
-  appendProcessor(sheet, processor);
-
+  repairActionSheet(sheet);
+  const processor = resolveActionRef(sheet, id);
   return {
     success: true,
-    data: { ...processor, config: data.config },
+    data: Object.assign({}, processor, { config: data.config }),
     message: 'Processor created successfully',
   };
 }
@@ -195,12 +226,15 @@ function handleUpdateProcessor(data) {
     return { success: false, error: 'Actions sheet not found' };
   }
 
-  updateProcessor(sheet, data.id || data.name, {
+  var ref = data.id || data.name;
+  writeProcessorRow(sheet, ref, {
+    name: data.name,
+    type: data.type,
     config: JSON.stringify(data.config),
     description: data.description,
   });
 
-  const processor = resolveActionRef(sheet, data.id || data.name);
+  const processor = resolveActionRef(sheet, ref);
   return { success: true, data: processor };
 }
 
@@ -586,8 +620,8 @@ function handleRemoveRepeatableJob(data) {
   if (!sheet) {
     return { success: false, error: 'Schedules sheet not found' };
   }
-  
-  deleteRepeatableByKey(sheet, data.key);
+
+  deleteRepeatableByKey(sheet, data.id || data.key);
   return { success: true, message: 'Repeatable job removed' };
 }
 
@@ -596,9 +630,10 @@ function handleToggleRepeatableJob(data) {
   if (!sheet) {
     return { success: false, error: 'Schedules sheet not found' };
   }
-  
-  updateRepeatableEnabled(sheet, data.key, data.enabled);
-  const job = findRepeatableByKey(sheet, data.key);
+
+  var scheduleId = data.id || data.key;
+  updateRepeatableEnabled(sheet, scheduleId, data.enabled);
+  const job = findRepeatableByKey(sheet, scheduleId);
   return { success: true, data: job };
 }
 
@@ -611,22 +646,44 @@ function handleCreateQueue(data) {
   ensureQueueHeaders(sheet);
 
   const id = data.id || generateUUID();
-  if (findQueueById(sheet, id)) {
-    return { success: false, error: 'Pipeline id already exists' };
-  }
-  if (findQueueByName(sheet, data.name)) {
-    return { success: false, error: 'Pipeline name already exists' };
+  const existingById = findQueueById(sheet, id);
+  if (existingById) {
+    return {
+      success: true,
+      data: existingById,
+      message: 'Queue already exists',
+    };
   }
 
-  const queue = {
+  const existingByName = findQueueByName(sheet, data.name);
+  if (existingByName) {
+    var rowIndex = findQueueRowIndex(sheet, existingByName.id || data.name);
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex + 1, 1, rowIndex + 1, 4).setValues([[
+        id,
+        data.name,
+        existingByName.isPaused || false,
+        existingByName.createdAt || new Date().toISOString(),
+      ]]);
+    }
+    repairPipelineSheet(sheet);
+    const queue = findQueueById(sheet, id);
+    return {
+      success: true,
+      data: queue,
+      message: 'Queue linked successfully',
+    };
+  }
+
+  appendQueue(sheet, {
     id: id,
     name: data.name,
     isPaused: false,
     createdAt: new Date().toISOString(),
-  };
+  });
 
-  appendQueue(sheet, queue);
-
+  repairPipelineSheet(sheet);
+  const queue = findQueueById(sheet, id);
   return {
     success: true,
     data: queue,
@@ -1242,30 +1299,38 @@ function createScriptHelpers(logs, outputs, isDryRun) {
       Logger.log('[Script] ' + logMessage);
     },
     
-    addJob: function(queueName, processor, data, opts) {
+    addJob: function(queueRef, actionRef, data, opts) {
       if (isDryRun) {
-        logs.push(`[DRY RUN] Would add job: ${queueName}::${processor}`);
+        logs.push('[DRY RUN] Would add job: ' + queueRef + '::' + actionRef);
         return { id: 'dry-run-' + generateUUID() };
       }
-      
+
       const jobsSheet = getOrCreateSheet(QUEUE_SHEET);
       ensureJobHeaders(jobsSheet);
-      
+      const pipelinesSheet = getSheet(PIPELINES_SHEET);
+      const actionsSheet = getSheet(ACTIONS_SHEET);
+      const pipeline = pipelinesSheet
+        ? resolvePipelineRef(pipelinesSheet, queueRef)
+        : null;
+      const action = actionsSheet
+        ? resolveActionRef(actionsSheet, actionRef)
+        : null;
+
       const job = {
         id: generateUUID(),
-        queueName: queueName,
-        processor: processor,
+        pipelineId: pipeline ? pipeline.id : queueRef,
+        actionId: action ? action.id : actionRef,
         data: JSON.stringify(data),
-        state: opts?.delay ? 'delayed' : 'waiting',
-        priority: opts?.priority || 0,
+        state: opts && opts.delay ? 'delayed' : 'waiting',
+        priority: (opts && opts.priority) || 0,
         attempts: 0,
-        maxAttempts: opts?.attempts || 3,
-        delay: opts?.delay || 0,
+        maxAttempts: (opts && opts.attempts) || 3,
+        delay: (opts && opts.delay) || 0,
         timestamp: new Date().toISOString(),
         processedOn: null,
         repeatJobKey: null,
       };
-      
+
       appendJob(jobsSheet, job);
       Logger.log('[Script] Created job: ' + job.id);
       return { id: job.id };
@@ -1364,6 +1429,7 @@ function moveToGraveyard(job, finalState) {
 
 function ensureQueueHeaders(sheet) {
   migratePipelineSheet(sheet);
+  repairPipelineSheet(sheet);
   if (sheet.getLastRow() > 0) return;
   sheet.appendRow(['id', 'name', 'isPaused', 'createdAt']);
   formatPipelineHeaderRow(sheet);
@@ -1382,6 +1448,87 @@ function formatPipelineHeaderRow(sheet) {
   sheet.setTabColor('#1a73e8');
 }
 
+function parseQueueRow(row) {
+  if (!row || row[0] === '' || row[0] == null) return null;
+
+  var col0 = String(row[0]);
+  var col1 = row[1];
+
+  if (!isExecutorId(col0) && (col1 === true || col1 === false || col1 === 'TRUE' || col1 === 'FALSE')) {
+    return {
+      id: null,
+      name: col0,
+      isPaused: col1 === true || col1 === 'TRUE',
+      createdAt: row[2] || new Date().toISOString(),
+    };
+  }
+
+  return rowToQueue(row);
+}
+
+function repairPipelineSheet(sheet) {
+  if (!sheet || sheet.getLastRow() <= 1) return;
+
+  var headers = sheetHeaderRow(sheet);
+  if (headers.length === 0 || headers[0] !== 'id') return;
+
+  var data = sheet.getDataRange().getValues();
+  var byName = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var parsed = parseQueueRow(data[i]);
+    if (!parsed || !parsed.name) continue;
+
+    var name = parsed.name;
+    var existing = byName[name];
+    if (!existing) {
+      byName[name] = parsed;
+      continue;
+    }
+
+    var merged = {
+      id: existing.id || parsed.id,
+      name: name,
+      isPaused: parsed.isPaused !== undefined ? parsed.isPaused : existing.isPaused,
+      createdAt: existing.createdAt || parsed.createdAt,
+    };
+    if (isExecutorId(String(parsed.id))) merged.id = parsed.id;
+    else if (isExecutorId(String(existing.id))) merged.id = existing.id;
+    byName[name] = merged;
+  }
+
+  var names = Object.keys(byName).sort();
+  if (names.length === 0) return;
+
+  var rows = [['id', 'name', 'isPaused', 'createdAt']];
+  names.forEach(function(name) {
+    var q = byName[name];
+    rows.push([
+      q.id || generateUUID(),
+      q.name,
+      q.isPaused,
+      q.createdAt || new Date().toISOString(),
+    ]);
+  });
+
+  sheet.clear();
+  sheet.getRange(1, 1, rows.length, 4).setValues(rows);
+  formatPipelineHeaderRow(sheet);
+}
+
+function findQueueRowIndex(sheet, ref) {
+  if (!sheet || !ref) return -1;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(ref)) return i;
+    if (data[i][1] === ref) return i;
+    if (!isExecutorId(String(data[i][0])) && (data[i][1] === true || data[i][1] === false || data[i][1] === 'TRUE' || data[i][1] === 'FALSE') && data[i][0] === ref) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function rowToQueue(row) {
   return {
     id: String(row[0]),
@@ -1392,38 +1539,31 @@ function rowToQueue(row) {
 }
 
 function getAllQueues(sheet) {
-  migratePipelineSheet(sheet);
+  ensureQueueHeaders(sheet);
   const data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
 
   const queues = [];
   for (let i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
-    queues.push(rowToQueue(data[i]));
+    const parsed = parseQueueRow(data[i]);
+    if (parsed && parsed.name) queues.push(parsed);
   }
   return queues;
 }
 
 function findQueueById(sheet, id) {
-  migratePipelineSheet(sheet);
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(id)) {
-      return rowToQueue(data[i]);
-    }
-  }
-  return null;
+  ensureQueueHeaders(sheet);
+  var rowIndex = findQueueRowIndex(sheet, id);
+  if (rowIndex < 0) return null;
+  return parseQueueRow(sheet.getDataRange().getValues()[rowIndex]);
 }
 
 function findQueueByName(sheet, name) {
-  migratePipelineSheet(sheet);
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][1] === name) {
-      return rowToQueue(data[i]);
-    }
-  }
-  return null;
+  ensureQueueHeaders(sheet);
+  var rowIndex = findQueueRowIndex(sheet, name);
+  if (rowIndex < 0) return null;
+  return parseQueueRow(sheet.getDataRange().getValues()[rowIndex]);
 }
 
 function appendQueue(sheet, queue) {
@@ -1453,6 +1593,7 @@ function updateQueuePaused(sheet, ref, isPaused) {
 
 function ensureProcessorHeaders(sheet) {
   migrateActionSheet(sheet);
+  repairActionSheet(sheet);
   if (sheet.getLastRow() > 0) return;
   sheet.appendRow(['id', 'name', 'type', 'config', 'description', 'createdAt']);
   formatActionHeaderRow(sheet);
@@ -1473,56 +1614,155 @@ function formatActionHeaderRow(sheet) {
   sheet.setTabColor('#8430ce');
 }
 
-function rowToProcessor(row) {
-  let config;
+function isActionType(value) {
+  var s = String(value || '');
+  return s === 'http' || s === 'script' || s === 'http_ping';
+}
+
+function parseActionConfig(value) {
   try {
-    config = typeof row[3] === 'string' ? JSON.parse(row[3]) : row[3];
+    return typeof value === 'string' ? JSON.parse(value) : (value || {});
   } catch (e) {
-    config = {};
+    return {};
   }
+}
+
+function rowToProcessor(row) {
   return {
     id: String(row[0]),
     name: row[1],
     type: row[2],
-    config: config,
+    config: parseActionConfig(row[3]),
     description: row[4] || '',
     createdAt: row[5],
   };
 }
 
+function parseActionRow(row) {
+  if (!row || row[0] === '' || row[0] == null) return null;
+
+  var col0 = String(row[0]);
+  var col1 = row[1];
+
+  if (!isExecutorId(col0) && isActionType(col1)) {
+    return {
+      id: null,
+      name: col0,
+      type: String(col1),
+      config: parseActionConfig(row[2]),
+      description: row[3] || '',
+      createdAt: row[4] || new Date().toISOString(),
+    };
+  }
+
+  return rowToProcessor(row);
+}
+
+function repairActionSheet(sheet) {
+  if (!sheet || sheet.getLastRow() <= 1) return;
+
+  var headers = sheetHeaderRow(sheet);
+  if (headers.length === 0 || headers[0] !== 'id') return;
+
+  var data = sheet.getDataRange().getValues();
+  var byName = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var parsed = parseActionRow(data[i]);
+    if (!parsed || !parsed.name || parsed.name === 'http' || parsed.name === 'script' || parsed.name === 'http_ping') {
+      continue;
+    }
+
+    var name = parsed.name;
+    var existing = byName[name];
+    if (!existing) {
+      byName[name] = parsed;
+      continue;
+    }
+
+    var merged = {
+      id: existing.id || parsed.id,
+      name: name,
+      type: parsed.type === 'http_ping' || existing.type === 'http_ping'
+        ? 'http_ping'
+        : (parsed.type || existing.type),
+      config: parsed.config && Object.keys(parsed.config).length ? parsed.config : existing.config,
+      description: parsed.description || existing.description || '',
+      createdAt: existing.createdAt || parsed.createdAt,
+    };
+    if (isExecutorId(String(parsed.id))) merged.id = parsed.id;
+    else if (isExecutorId(String(existing.id))) merged.id = existing.id;
+    byName[name] = merged;
+  }
+
+  var names = Object.keys(byName).sort();
+  if (names.length === 0) return;
+
+  var rows = [['id', 'name', 'type', 'config', 'description', 'createdAt']];
+  names.forEach(function(name) {
+    var p = byName[name];
+    rows.push([
+      p.id || generateUUID(),
+      p.name,
+      p.type,
+      typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
+      p.description || '',
+      p.createdAt || new Date().toISOString(),
+    ]);
+  });
+
+  sheet.clear();
+  sheet.getRange(1, 1, rows.length, 6).setValues(rows);
+  formatActionHeaderRow(sheet);
+}
+
+function findProcessorRowIndex(sheet, ref) {
+  if (!sheet || !ref) return -1;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(ref)) return i;
+    if (data[i][1] === ref) return i;
+    if (!isExecutorId(String(data[i][0])) && isActionType(data[i][1]) && data[i][0] === ref) return i;
+  }
+  return -1;
+}
+
+function writeProcessorRow(sheet, id, updates) {
+  var rowIndex = findProcessorRowIndex(sheet, id);
+  if (rowIndex < 0) return;
+  var rowNum = rowIndex + 1;
+  if (updates.hasOwnProperty('name')) sheet.getRange(rowNum, 2).setValue(updates.name);
+  if (updates.hasOwnProperty('type')) sheet.getRange(rowNum, 3).setValue(updates.type);
+  if (updates.hasOwnProperty('config')) sheet.getRange(rowNum, 4).setValue(updates.config);
+  if (updates.hasOwnProperty('description')) sheet.getRange(rowNum, 5).setValue(updates.description);
+}
+
 function getAllProcessors(sheet) {
-  migrateActionSheet(sheet);
+  ensureProcessorHeaders(sheet);
   const data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
 
   const processors = [];
   for (let i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
-    processors.push(rowToProcessor(data[i]));
+    const parsed = parseActionRow(data[i]);
+    if (parsed && parsed.name) processors.push(parsed);
   }
   return processors;
 }
 
 function findProcessorById(sheet, id) {
-  migrateActionSheet(sheet);
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(id)) {
-      return rowToProcessor(data[i]);
-    }
-  }
-  return null;
+  ensureProcessorHeaders(sheet);
+  var rowIndex = findProcessorRowIndex(sheet, id);
+  if (rowIndex < 0) return null;
+  return parseActionRow(sheet.getDataRange().getValues()[rowIndex]);
 }
 
 function findProcessorByName(sheet, name) {
-  migrateActionSheet(sheet);
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][1] === name) {
-      return rowToProcessor(data[i]);
-    }
-  }
-  return null;
+  ensureProcessorHeaders(sheet);
+  var rowIndex = findProcessorRowIndex(sheet, name);
+  if (rowIndex < 0) return null;
+  return parseActionRow(sheet.getDataRange().getValues()[rowIndex]);
 }
 
 function appendProcessor(sheet, processor) {
@@ -1539,13 +1779,24 @@ function appendProcessor(sheet, processor) {
 function updateProcessor(sheet, ref, updates) {
   const processor = resolveActionRef(sheet, ref);
   if (!processor) return;
+  writeProcessorRow(sheet, processor.id, updates);
+}
+
+function reassignProcessorId(sheet, oldId, newId) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(processor.id)) {
-      const rowNum = i + 1;
-      if (updates.hasOwnProperty('config')) sheet.getRange(rowNum, 4).setValue(updates.config);
-      if (updates.hasOwnProperty('description')) sheet.getRange(rowNum, 5).setValue(updates.description);
-      if (updates.hasOwnProperty('name')) sheet.getRange(rowNum, 2).setValue(updates.name);
+    if (String(data[i][0]) === String(oldId)) {
+      sheet.getRange(i + 1, 1).setValue(newId);
+      break;
+    }
+  }
+}
+
+function reassignQueueId(sheet, oldId, newId) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(oldId)) {
+      sheet.getRange(i + 1, 1).setValue(newId);
       break;
     }
   }
@@ -2256,6 +2507,12 @@ function isUuidLike(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function isExecutorId(value) {
+  if (!value || typeof value !== 'string') return false;
+  if (isUuidLike(value)) return true;
+  return /^c[a-z0-9]{20,}$/i.test(value);
+}
+
 function sheetHeaderRow(sheet) {
   if (sheet.getLastRow() === 0) return [];
   return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
@@ -2317,7 +2574,7 @@ function migrateScheduleSheet(sheet) {
   for (let i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
     rows.push([
-      isUuidLike(String(data[i][0])) ? data[i][0] : generateUUID(),
+      isExecutorId(String(data[i][0])) ? data[i][0] : generateUUID(),
       data[i][1],
       data[i][2],
       data[i][3],
@@ -2349,11 +2606,11 @@ function migrateSchedulePipelineActionIds(schedulesSheet, pipelinesSheet, action
   for (let i = 1; i < data.length; i++) {
     const pRef = data[i][1];
     const aRef = data[i][2];
-    if (pRef && !isUuidLike(String(pRef)) && pipelineIdByName[pRef]) {
+    if (pRef && !isExecutorId(String(pRef)) && pipelineIdByName[pRef]) {
       data[i][1] = pipelineIdByName[pRef];
       changed = true;
     }
-    if (aRef && !isUuidLike(String(aRef)) && actionIdByName[aRef]) {
+    if (aRef && !isExecutorId(String(aRef)) && actionIdByName[aRef]) {
       data[i][2] = actionIdByName[aRef];
       changed = true;
     }
@@ -2378,11 +2635,11 @@ function migrateJobPipelineActionIds(jobsSheet, pipelinesSheet, actionsSheet) {
   for (let i = 1; i < data.length; i++) {
     const pRef = data[i][1];
     const aRef = data[i][2];
-    if (pRef && !isUuidLike(String(pRef)) && pipelineIdByName[pRef]) {
+    if (pRef && !isExecutorId(String(pRef)) && pipelineIdByName[pRef]) {
       data[i][1] = pipelineIdByName[pRef];
       changed = true;
     }
-    if (aRef && !isUuidLike(String(aRef)) && actionIdByName[aRef]) {
+    if (aRef && !isExecutorId(String(aRef)) && actionIdByName[aRef]) {
       data[i][2] = actionIdByName[aRef];
       changed = true;
     }
@@ -2394,18 +2651,14 @@ function migrateJobPipelineActionIds(jobsSheet, pipelinesSheet, actionsSheet) {
 
 function resolvePipelineRef(sheet, ref) {
   if (!sheet || !ref) return null;
-  if (isUuidLike(String(ref))) {
-    return findQueueById(sheet, ref) || findQueueByName(sheet, ref);
-  }
-  return findQueueByName(sheet, ref);
+  const s = String(ref);
+  return findQueueById(sheet, s) || findQueueByName(sheet, s);
 }
 
 function resolveActionRef(sheet, ref) {
   if (!sheet || !ref) return null;
-  if (isUuidLike(String(ref))) {
-    return findProcessorById(sheet, ref) || findProcessorByName(sheet, ref);
-  }
-  return findProcessorByName(sheet, ref);
+  const s = String(ref);
+  return findProcessorById(sheet, s) || findProcessorByName(sheet, s);
 }
 
 function enrichJobWithNames(job, pipelinesSheet, actionsSheet) {
