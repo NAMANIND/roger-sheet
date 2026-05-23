@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { getProcessor } from '@/app/actions/processors';
 import { ProcessorForm } from '@/components/processor-form';
 
@@ -7,13 +7,17 @@ export const dynamic = 'force-dynamic';
 export default async function EditActionPage({
   params,
 }: {
-  params: Promise<{ name: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { name: rawName } = await params;
-  const name = decodeURIComponent(rawName);
-  const result = await getProcessor(name);
+  const { id: rawId } = await params;
+  const id = decodeURIComponent(rawId);
+  const result = await getProcessor(id);
 
   if (!result.success || !result.data) notFound();
+
+  if (result.data.id !== id) {
+    redirect(`/actions/${encodeURIComponent(result.data.id)}/edit`);
+  }
 
   return (
     <div className="max-w-3xl">

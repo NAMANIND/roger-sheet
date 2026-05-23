@@ -50,7 +50,7 @@ function inferActionType(config: ProcessorConfig): ActionType {
 /** Old deployed Apps Script can read id-first sheet rows with the legacy column map. */
 export function normalizeExecutorProcessor(
   raw: Processor & { id?: string }
-): (Processor & { id?: string }) | null {
+): (Omit<Processor, 'id'> & { id?: string }) | null {
   let id = raw.id;
   let name = raw.name;
   let type = raw.type;

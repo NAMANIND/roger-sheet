@@ -417,9 +417,9 @@ export function ProcessorForm({ processor }: ProcessorFormProps) {
         }
       }
 
-      if (isEdit) {
+      if (isEdit && processor) {
         const result = await updateProcessor(
-          name,
+          processor.id,
           config,
           description.trim() || undefined
         );

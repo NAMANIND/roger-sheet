@@ -33,7 +33,7 @@ export interface ScriptProcessorConfig extends ProcessorParamSchema {
 export type ProcessorConfig = HttpProcessorConfig | ScriptProcessorConfig;
 
 export interface Processor {
-  id?: string;
+  id: string;
   name: string;
   type: ProcessorType;
   config: ProcessorConfig;

@@ -18,31 +18,29 @@ export async function getProcessors(): Promise<ApiResponse<Processor[]>> {
   return actionService.listActions();
 }
 
-export async function getProcessor(
-  name: string
-): Promise<ApiResponse<Processor>> {
-  return actionService.getAction(name);
+export async function getProcessor(id: string): Promise<ApiResponse<Processor>> {
+  return actionService.getAction(id);
 }
 
 export async function updateProcessor(
-  name: string,
+  id: string,
   config: unknown,
   description?: string
 ): Promise<ApiResponse<Processor>> {
-  return actionService.updateAction(name, config as never, description);
+  return actionService.updateAction(id, config as never, description);
 }
 
 export async function deleteProcessor(
-  name: string
+  id: string
 ): Promise<ApiResponse<void>> {
-  return actionService.deleteAction(name);
+  return actionService.deleteAction(id);
 }
 
 export async function testProcessor(
-  name: string,
+  id: string,
   testData?: Record<string, unknown>
 ): Promise<ApiResponse<unknown>> {
-  return actionService.testAction(name, testData);
+  return actionService.testAction(id, testData);
 }
 
 export async function testProcessorDraft(

@@ -56,25 +56,33 @@ export async function listActions(): Promise<ApiResponse<Processor[]>> {
   return ok(rows.map(mapAction));
 }
 
-export async function getAction(name: string): Promise<ApiResponse<Processor>> {
+export async function getAction(id: string): Promise<ApiResponse<Processor>> {
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
-  const row = await prisma.action.findUnique({
-    where: { organizationId_name: { organizationId: org.id, name } },
+
+  const byId = await prisma.action.findFirst({
+    where: { id, organizationId: org.id },
   });
-  if (!row) return fail('Action not found');
-  return ok(mapAction(row));
+  if (byId) return ok(mapAction(byId));
+
+  const byName = await prisma.action.findUnique({
+    where: { organizationId_name: { organizationId: org.id, name: id } },
+  });
+  if (byName) return ok(mapAction(byName));
+
+  return fail('Action not found');
 }
 
 export async function updateAction(
-  name: string,
+  id: string,
   config: ProcessorConfig,
   description?: string
 ): Promise<ApiResponse<Processor>> {
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
-  const row = await prisma.action.findUnique({
-    where: { organizationId_name: { organizationId: org.id, name } },
+
+  const row = await prisma.action.findFirst({
+    where: { id, organizationId: org.id },
   });
   if (!row) return fail('Action not found');
 
@@ -108,11 +116,11 @@ export async function updateAction(
   return ok(mapAction(updated), 'Action updated');
 }
 
-export async function deleteAction(name: string): Promise<ApiResponse<void>> {
+export async function deleteAction(id: string): Promise<ApiResponse<void>> {
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
-  const row = await prisma.action.findUnique({
-    where: { organizationId_name: { organizationId: org.id, name } },
+  const row = await prisma.action.findFirst({
+    where: { id, organizationId: org.id },
   });
   if (!row) return fail('Action not found');
 
@@ -140,13 +148,13 @@ export async function deleteAction(name: string): Promise<ApiResponse<void>> {
 
 /** Tests always hit executor directly (not outbox). */
 export async function testAction(
-  name: string,
+  id: string,
   testData?: Record<string, unknown>
 ): Promise<ApiResponse<unknown>> {
   const org = await getActiveOrganization();
   if (!org) return fail('Unauthorized');
-  const row = await prisma.action.findUnique({
-    where: { organizationId_name: { organizationId: org.id, name } },
+  const row = await prisma.action.findFirst({
+    where: { id, organizationId: org.id },
   });
   if (!row) return fail('Action not found');
   return callExecutor('testProcessor', { id: row.id, name: row.name, testData });

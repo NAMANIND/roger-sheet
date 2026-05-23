@@ -39,10 +39,10 @@ export function ProcessorsList({
   const router = useRouter();
   const [processors, setProcessors] = useState(initialProcessors);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [processorToDelete, setProcessorToDelete] = useState<string | null>(
+  const [processorToDelete, setProcessorToDelete] = useState<Processor | null>(
     null,
   );
-  const [testResults, setTestResults] = useState<Record<string, any>>({});
+  const [testResults, setTestResults] = useState<Record<string, unknown>>({});
   const [testingProcessor, setTestingProcessor] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,9 +52,9 @@ export function ProcessorsList({
   const handleDelete = async () => {
     if (!processorToDelete) return;
 
-    const result = await deleteProcessor(processorToDelete);
+    const result = await deleteProcessor(processorToDelete.id);
     if (result.success) {
-      setProcessors(processors.filter((p) => p.name !== processorToDelete));
+      setProcessors(processors.filter((p) => p.id !== processorToDelete.id));
       setDeleteDialogOpen(false);
       setProcessorToDelete(null);
       void onReload?.();
@@ -62,7 +62,7 @@ export function ProcessorsList({
   };
 
   const handleTest = async (processor: Processor) => {
-    setTestingProcessor(processor.name);
+    setTestingProcessor(processor.id);
 
     const defaults = processor.config.paramDefaults ?? {};
     const testData =
@@ -70,11 +70,11 @@ export function ProcessorsList({
         ? buildTestDataFromDefaults(defaults)
         : {};
 
-    const result = await testProcessor(processor.name, testData);
+    const result = await testProcessor(processor.id, testData);
 
     setTestResults({
       ...testResults,
-      [processor.name]: result,
+      [processor.id]: result,
     });
     setTestingProcessor(null);
   };
@@ -120,7 +120,7 @@ export function ProcessorsList({
       ) : (
         <div className="grid gap-4">
           {processors.map((processor) => (
-            <Card key={processor.name}>
+            <Card key={processor.id}>
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div className="space-y-1">
@@ -148,7 +148,7 @@ export function ProcessorsList({
                       size="sm"
                       onClick={() =>
                         router.push(
-                          `/actions/${encodeURIComponent(processor.name)}/edit`,
+                          `/actions/${encodeURIComponent(processor.id)}/edit`,
                         )
                       }
                     >
@@ -159,10 +159,10 @@ export function ProcessorsList({
                       variant="outline"
                       size="sm"
                       onClick={() => handleTest(processor)}
-                      disabled={testingProcessor === processor.name}
+                      disabled={testingProcessor === processor.id}
                     >
                       <FlaskConical className="h-4 w-4 mr-1" />
-                      {testingProcessor === processor.name
+                      {testingProcessor === processor.id
                         ? "Testing..."
                         : "Test"}
                     </Button>
@@ -170,7 +170,7 @@ export function ProcessorsList({
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        setProcessorToDelete(processor.name);
+                        setProcessorToDelete(processor);
                         setDeleteDialogOpen(true);
                       }}
                     >
@@ -223,19 +223,19 @@ export function ProcessorsList({
                       </div>
                     )}
 
-                  {testResults[processor.name] && (
+                  {testResults[processor.id] != null && (
                     <div className="space-y-3 pt-2 border-t">
                       <h4 className="text-sm font-medium">Test result</h4>
-                      {testResults[processor.name].success ? (
+                      {(testResults[processor.id] as { success?: boolean }).success ? (
                         <ExecutionOutput
                           title="Test output"
-                          value={testResults[processor.name].data}
+                          value={(testResults[processor.id] as { data?: unknown }).data}
                           borderClassName="border-emerald-200"
                           titleClassName="text-emerald-700"
                         />
                       ) : (
                         <pre className="p-3 rounded text-xs overflow-x-auto bg-red-50 text-red-900 font-mono whitespace-pre-wrap">
-                          {testResults[processor.name].error ?? "Test failed"}
+                          {(testResults[processor.id] as { error?: string }).error ?? "Test failed"}
                         </pre>
                       )}
                     </div>
@@ -253,7 +253,7 @@ export function ProcessorsList({
             <AlertDialogTitle>Delete Processor</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete processor &quot;
-              {processorToDelete}&quot;? Jobs using this processor will fail.
+              {processorToDelete?.name}&quot;? Jobs using this processor will fail.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
