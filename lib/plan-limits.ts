@@ -34,8 +34,10 @@ export function remainingCount(used: number, limit: number | null): number | nul
 }
 
 export function formatRemaining(used: number, limit: number | null): string {
-  const remaining = remainingCount(used, limit);
   if (limit == null) return `${used.toLocaleString()} used · unlimited`;
-  if (remaining === 0) return `${used.toLocaleString()} / ${limit.toLocaleString()} · none left`;
+  const remaining = Math.max(0, limit - used);
+  if (remaining === 0) {
+    return `${used.toLocaleString()} / ${limit.toLocaleString()} · none left`;
+  }
   return `${remaining.toLocaleString()} remaining of ${limit.toLocaleString()}`;
 }
