@@ -48,7 +48,10 @@ const navSections: NavSection[] = [
   },
   {
     heading: 'Logs',
-    items: [{ label: 'History', href: '/history', icon: Archive }],
+    items: [
+      { label: 'History', href: '/history', icon: Archive },
+      { label: 'Companion test', href: '/companion-test', icon: Zap },
+    ],
   },
 ];
 
