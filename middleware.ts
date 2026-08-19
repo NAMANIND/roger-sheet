@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { ONBOARDING_COOKIE, SESSION_COOKIE } from '@/lib/auth/constants';
 
-const PUBLIC_PATHS = new Set(['/', '/login']);
+const PUBLIC_PATHS = new Set(['/', '/login', '/companion-test']);
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
