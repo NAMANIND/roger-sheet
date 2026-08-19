@@ -111,8 +111,8 @@ export default function CompanionTestPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Companion test</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Reproduces <strong>current</strong> rogerAI behavior — no fix applied here. Toggle
-          extension off, hard refresh, watch which step fails.
+          Reproduces rogerAI with <strong>fix applied</strong> — query runs on desktop even when
+          sendMessage is missing (treated as not_installed).
         </p>
       </div>
 
@@ -218,8 +218,8 @@ export default function CompanionTestPage() {
         <CardHeader>
           <CardTitle>Auto ping (react-query)</CardTitle>
           <CardDescription>
-            enabled = hasUserId && !impersonating && EXTENSION && extensionCheckable — matches
-            rogerAI line 203.
+            enabled = hasUserId && !impersonating && EXTENSION && onDesktop — fix (not
+            extensionCheckable).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -253,9 +253,8 @@ export default function CompanionTestPage() {
             Refetch now
           </Button>
           {!queryEnabled && (
-            <p className="text-xs text-red-600">
-              Auto ping disabled — extensionCheckable is false. This is the prod bug when
-              sendMessage disappears after toggling extension off.
+            <p className="text-xs text-muted-foreground">
+              Auto ping disabled — mobile or missing session / not EXTENSION method.
             </p>
           )}
         </CardContent>

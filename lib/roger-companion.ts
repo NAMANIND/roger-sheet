@@ -72,7 +72,7 @@ export function getCompanionGateSnapshot(
     extensionId: extension.id,
     extensionUrl: extension.url,
     origin: typeof window !== 'undefined' ? window.location.origin : '',
-    queryEnabled: baseEnabled && extensionCheckable,
+    queryEnabled: baseEnabled && onDesktop,
   };
 }
 
@@ -167,7 +167,7 @@ export function diagnoseRogerAiCompanionFlow(opts: {
       id: 'send-message',
       label: 'chrome.runtime.sendMessage exists',
       pass: gate.chrome.sendMessage === 'function',
-      detail: `typeof sendMessage = ${gate.chrome.sendMessage}`,
+      detail: `typeof sendMessage = ${gate.chrome.sendMessage} (info only — missing still pings as not_installed)`,
       codeRef: 'use-linkedin-auth.ts ~189 canCheckExtension',
     },
     {
@@ -233,11 +233,11 @@ export function diagnoseRogerAiCompanionFlow(opts: {
     };
   }
 
-  if (!isExtensionLinkedIn || !gate.extensionCheckable) {
+  if (!isExtensionLinkedIn || !gate.onDesktop) {
     return {
       steps,
       showBanner: false,
-      blockedAt: '!isExtensionLinkedIn || !extensionCheckable → setShowBanner(false)',
+      blockedAt: '!isExtensionLinkedIn || !onDesktop → setShowBanner(false)',
     };
   }
 
